@@ -1,0 +1,38 @@
+[project]
+name = "handseller-bookkeeping"
+version = "0.1.0"
+description = "Agentic bookkeeping backend: FastAPI + Supabase + Redis + Inngest + FastMCP + OpenAI Agents SDK"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "supabase>=2.7.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "redis>=5.0.0",
+    "inngest>=0.3.0",
+    "fastmcp>=0.2.0",
+    "openai-agents>=0.0.3",
+    "pyjwt>=2.9.0",
+    "python-dotenv>=1.0.1",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-mock>=3.14.0",
+    "pytest-asyncio>=0.24.0",
+    "fakeredis>=2.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app", "routers", "services", "repository", "middleware", "jobs", "mcp", "agents"]
