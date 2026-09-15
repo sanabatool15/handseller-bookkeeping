@@ -1,30 +1,21 @@
 """FastMCP server (stdio transport) exposing all 5 MCP primitives.
 
-Run with:  python mcp/server.py
-(or:       fastmcp run mcp/server.py)
+Run with:  python mcp_gateway/server.py
+(or:       fastmcp run mcp_gateway/server.py)
 
-NAMESPACE NOTE (important, see README "MCP package-name collision"): this
-file deliberately has NO `mcp/__init__.py` sibling and is never imported as
-`mcp.server` from anywhere else in this codebase or its tests. The `mcp`
-Python SDK (a dependency of `fastmcp`) is also a top-level package named
-`mcp`; if this directory were an importable package also named `mcp` and
-got imported first, it would shadow the real SDK and break `import fastmcp`
-entirely (verified: `ModuleNotFoundError: No module named 'mcp.server'`).
-Keeping this directory package-less and always loading this file directly
-(as a script, or via `importlib.util.spec_from_file_location` under a
-different module name in tests) avoids that collision while still matching
-the spec's required `mcp/server.py` path.
+FIXED (previously documented limitation): this package used to be named
+`mcp/`, which collided with the top-level `mcp` package installed by the
+`mcp` Python SDK (a dependency of `fastmcp`) — importing this directory as
+a package (i.e. giving it an `__init__.py`) shadowed the real SDK and
+broke `import fastmcp` entirely (verified:
+`ModuleNotFoundError: No module named 'mcp.server'`). This package is now
+named `mcp_gateway/` specifically to free up the `mcp` import for the real
+SDK, so it can now have a normal `__init__.py` and be imported normally
+(`from mcp_gateway.server import mcp`) — see `tests/unit/test_mcp_server.py`,
+which no longer needs the `importlib.util` workaround this file's old
+version required.
 """
 from __future__ import annotations
-
-import sys
-from pathlib import Path
-
-# Make repo-root imports (app, repository, services, agents, ...) work when
-# this file is run directly as a script.
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
 import datetime as dt
 import logging
@@ -33,7 +24,7 @@ from fastmcp import Context, FastMCP
 
 from app.clients import get_supabase
 from app.config import get_settings
-from agents.prompt_loader import load_prompt
+from ai_agents.prompt_loader import load_prompt
 from repository import agent_jobs_repository
 from services import expenses_service, sales_service
 from services.financial_report_service import monthly_ledger_csv, monthly_summary

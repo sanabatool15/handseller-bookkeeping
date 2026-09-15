@@ -1,4 +1,4 @@
-from agents.rules.fallback_engine import rule_based_financial_advice
+from ai_agents.rules.fallback_engine import rule_based_financial_advice
 
 
 def test_fallback_flags_loss():

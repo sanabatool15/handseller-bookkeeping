@@ -1,4 +1,4 @@
-from agents.tools.deep_link import build_deep_link
+from ai_agents.tools.deep_link import build_deep_link
 
 
 def test_build_deep_link_basic():

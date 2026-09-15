@@ -62,7 +62,7 @@ step-memoization state, which the app doesn't have direct query access to.
 A step-by-step audit trail for each `agent_jobs` row: one row per
 completed step (`gather_data`, `run_agent`, `finalize`), each with a
 human-readable `action_summary` and a structured `insights_generated` jsonb
-blob. This is what lets `mcp/server.py`'s `stream_job_logs` tool replay a
+blob. This is what lets `mcp_gateway/server.py`'s `stream_job_logs` tool replay a
 job's history to an external MCP client, and it's the audit trail that
 proves — after the fact — exactly what data the AI agent saw and what it
 concluded, which matters for a bookkeeping system where "why did the agent

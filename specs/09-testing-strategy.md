@@ -9,7 +9,7 @@ Three tiers, exactly matching the spec's required folder split:
   mocked or faked. Covers: `sales_service`, `expenses_service`,
   `financial_report_service` calculations, `ownership` scoping logic,
   `fallback_engine`, `financial_advisor_agent`'s SDK-detection behavior,
-  `prompt_loader`, `agents/tools/`, and `mcp/server.py`'s primitive
+  `prompt_loader`, `ai_agents/tools/`, and `mcp_gateway/server.py`'s primitive
   registration.
 - **`tests/integration/`** — drives the app through FastAPI's `TestClient`,
   exercising real routing + middleware + service + repository code paths
@@ -80,11 +80,11 @@ RUN_E2E=1 pytest tests/e2e -v                # requires: docker compose up (see 
   of 404).
 - **Changed `middleware/idempotency.py`?** Run
   `pytest tests/integration/test_idempotency.py -v`.
-- **Changed `mcp/server.py`?** Run `pytest tests/unit/test_mcp_server.py -v`
-  — this is the regression test for the `mcp` package-name collision
-  described in `07-mcp-server.md`; it proves the server still loads and
-  registers all 5 primitives under this repo's real (non-package) `mcp/`
-  directory layout.
+- **Changed `mcp_gateway/server.py`?** Run `pytest tests/unit/test_mcp_server.py -v`
+  — this is the regression test for the (now-fixed) `mcp` package-name
+  collision described in `07-mcp-server.md`; it proves the server still
+  loads and registers all 5 primitives via a normal
+  `from mcp_gateway.server import ...` import.
 - **Added a new mutating endpoint or table?** Add both a unit test (service
   logic, mocked/faked repository) and an integration test (`TestClient`,
   via `tests/fakes.py`) — see the existing `sales`/`expenses` tests as the

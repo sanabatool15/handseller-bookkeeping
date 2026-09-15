@@ -22,14 +22,14 @@ repository/  the ONLY layer allowed to run db.table(...) Supabase queries
   callers of `repository/`. A service never imports `app.clients.get_supabase`
   directly and never calls `.table(`.
 - `repository/*.py`: the only files in the codebase (besides
-  `mcp/server.py`'s read-only ledger path, which itself calls into
+  `mcp_gateway/server.py`'s read-only ledger path, which itself calls into
   `services/`) that call `db.table(...)`. Every repository function that
   reads, updates, or deletes a specific row is also responsible for
   enforcing the `id` + `org_id` scoping rule (see
   `03-multi-tenancy-security.md`).
 
 `middleware/` sits outside this chain entirely (it wraps the whole request
-before any router runs) and `jobs/`, `mcp/` reuse `services/` the same way
+before any router runs) and `jobs/`, `mcp_gateway/` reuse `services/` the same way
 routers do, so validation/scoping logic is never duplicated per entry point.
 
 ## Why we did it
@@ -61,7 +61,7 @@ Concentrating **all** database access in one layer means:
 3. **Routers stay thin and boring.** A router's job is to be an adapter
    between HTTP and the service layer — this makes it trivial to expose the
    exact same logic through a second interface. This is exactly how
-   `mcp/server.py`'s tools work: `log_sale`/`log_expense` call
+   `mcp_gateway/server.py`'s tools work: `log_sale`/`log_expense` call
    `services.sales_service` / `services.expenses_service` directly, the same
    functions the HTTP routers call, so a sale logged via REST and a sale
    logged via an MCP client go through identical validation and scoping.

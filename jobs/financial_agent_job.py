@@ -24,8 +24,8 @@ import inngest
 from app.clients import get_supabase
 from jobs.inngest_client import inngest_client
 from repository import agent_jobs_repository
-from agents.api.financial_advisor_agent import run_financial_advisor
-from agents.rules.fallback_engine import rule_based_financial_advice
+from ai_agents.api.financial_advisor_agent import run_financial_advisor
+from ai_agents.rules.fallback_engine import rule_based_financial_advice
 
 EVENT_NAME = "financial/advice.requested"
 

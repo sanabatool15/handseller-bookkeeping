@@ -55,13 +55,14 @@ concrete, observed problems — not a hypothetical "best practice."
 - [`05-background-jobs-inngest.md`](./05-background-jobs-inngest.md) — why
   agent work moved off the request thread, how the multi-step Inngest job
   is structured, and how it survives a mid-run crash.
-- [`06-agents-layer.md`](./06-agents-layer.md) — the `agents/` package
+- [`06-agents-layer.md`](./06-agents-layer.md) — the `ai_agents/` package
   structure (prompts/api/rules/tools), the OpenAI Agents SDK integration,
   the deterministic rule-based fallback, and the `agents` package-name
-  collision.
+  collision (fixed by renaming `agents/` to `ai_agents/`).
 - [`07-mcp-server.md`](./07-mcp-server.md) — the FastMCP stdio server and
   how each of the 5 MCP primitives (tools, resources, prompts, sampling,
-  logging) was implemented, plus the `mcp` package-name collision.
+  logging) was implemented, plus the `mcp` package-name collision (fixed
+  by renaming `mcp/` to `mcp_gateway/`).
 - [`08-infrastructure-docker.md`](./08-infrastructure-docker.md) — the
   Dockerfile and docker-compose topology and why it's shaped this way.
 - [`09-testing-strategy.md`](./09-testing-strategy.md) — the unit /

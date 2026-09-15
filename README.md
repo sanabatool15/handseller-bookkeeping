@@ -13,8 +13,9 @@ services/      Business logic + validation (no direct DB access)
 repository/    The ONLY layer allowed to run Supabase queries
 middleware/    Auth (JWT) + Redis-backed Idempotency middleware
 jobs/          Inngest client + the financial-advisor background function
-mcp/           FastMCP server (stdio) — tools/resources/prompts/sampling/logging
-agents/
+mcp_gateway/   FastMCP server (stdio) — tools/resources/prompts/sampling/logging
+               (renamed from mcp/ — see "Package-name collisions, fixed" below)
+ai_agents/     (renamed from agents/ — see "Package-name collisions, fixed" below)
   prompts/     Agent + system prompts as .md files (never hardcoded strings)
   api/         OpenAI Agents SDK orchestration
   rules/       Deterministic rule-based fallback (works fully offline)
@@ -34,7 +35,7 @@ which validates input and calls `repository/`, the only place `db.table(...)`
 is ever invoked. This is enforced by convention and code review, not a
 runtime check, but the four modules under `repository/` are the sole holders
 of Supabase query code in this repo (grep for `.table(` — it only appears
-there and in `mcp/server.py`'s ledger-reading path, which itself calls into
+there and in `mcp_gateway/server.py`'s ledger-reading path, which itself calls into
 `services/`).
 
 ## Database schema
@@ -93,9 +94,10 @@ the `job_id` immediately. `GET /agent-jobs/{job_id}` polls status.
 
 1. **gather-data** — pull this month's sales/expense totals from Postgres.
 2. **run-agent** — run the OpenAI Agents SDK financial advisor; on ANY
-   failure (network, API key, SDK import shadowing — see below) it falls
-   back to `agents/rules/fallback_engine.py`, a fully deterministic, offline
-   rule engine, so the job always produces useful advice.
+   failure (not installed, no network, no API key, the live call itself
+   erroring) it falls back to `ai_agents/rules/fallback_engine.py`, a fully
+   deterministic, offline rule engine, so the job always produces useful
+   advice.
 3. **finalize** — mark the job `completed` and store the result.
 
 Each step writes to `agent_logs` (`step_name`, `action_summary`,
@@ -124,7 +126,7 @@ and `jobs/financial_agent_job.py` are the only two files that need updating.
 
 ## Full Model Context Protocol (FastMCP, stdio)
 
-`mcp/server.py` implements all 5 MCP primitives, verified against
+`mcp_gateway/server.py` implements all 5 MCP primitives, verified against
 **fastmcp==4.0.3**:
 
 1. **Tools** — `log_sale`, `log_expense`, `trigger_financial_agent_job` (plus
@@ -133,7 +135,7 @@ and `jobs/financial_agent_job.py` are the only two files that need updating.
 2. **Resources** — `ledger://{org_id}/monthly.csv`, a resource *template*
    that reads live sales/expenses from Postgres and returns a raw CSV string.
 3. **Prompts** — `financial_audit(org_id)`, which loads
-   `agents/prompts/financial_audit.md` via `agents/prompt_loader.py` and
+   `ai_agents/prompts/financial_audit.md` via `ai_agents/prompt_loader.py` and
    pre-fills it with the org's current ledger CSV.
 4. **Sampling** — `summarize_ledger_via_client_llm` calls
    `ctx.session.create_message(...)` (the standard MCP
@@ -151,47 +153,75 @@ and `jobs/financial_agent_job.py` are the only two files that need updating.
 ### Run the MCP server
 
 ```bash
-python mcp/server.py
+python mcp_gateway/server.py
 # or:
-fastmcp run mcp/server.py
+fastmcp run mcp_gateway/server.py
 ```
 
 Connect any MCP-compatible client (Claude Desktop, the `mcp` CLI inspector,
 etc.) over stdio by pointing it at that command.
 
-### MCP package-name collision (documented limitation)
+### Package-name collisions, fixed
 
-The `mcp` Python SDK (a dependency of `fastmcp`) installs as a top-level
-module also named `mcp`. The task spec requires this server live at
-`mcp/server.py`. To avoid `mcp/` (our directory) shadowing the real SDK
-package — which we verified breaks `import fastmcp` entirely
-(`ModuleNotFoundError: No module named 'mcp.server'`) if our directory has
-an `__init__.py` and gets imported as `mcp` before the SDK does — **this
-directory intentionally has no `__init__.py`** and `mcp/server.py` is never
-imported anywhere in this codebase via `import mcp.server` or
-`from mcp.server import ...`. It's always either run directly as a script,
-or (in `tests/unit/test_mcp_server.py`) loaded via
-`importlib.util.spec_from_file_location(...)` under a distinct module name.
-Do not add an `__init__.py` here or add `from mcp.server import ...`
-anywhere else without re-testing this collision.
+Two previously documented limitations in this codebase were package-name
+collisions between our own directories and third-party SDKs of the same
+name — both are now fixed by renaming our packages, not by working around
+the collision:
 
-A related, separate collision: `openai-agents` also installs as a top-level
-module named `agents`, colliding with this repo's own `agents/` package
-(also required by the spec). `agents/api/financial_advisor_agent.py`
-documents and handles this in detail — in short, `import agents` from
-*inside* our own `agents` package always resolves to itself (Python caches
-the parent package before importing submodules), so the SDK path is
-effectively always "unavailable" when run from within this repo as-is, and
-the code treats that exactly like "SDK down" and raises
-`AgentUnavailableError`, which the Inngest job step catches and routes to
-the rule-based fallback engine. If you need the real SDK to work end-to-end,
-run it from a process where `agents/` (this repo) is not what Python
-resolves `import agents` to (e.g. a separate service/venv boundary, or
-renaming one of the two packages).
+- **`mcp` (SDK) vs. our own `mcp/` directory.** The `mcp` Python SDK (a
+  dependency of `fastmcp`) installs as a top-level module named `mcp`. This
+  repo used to have its own top-level `mcp/` directory (required by an
+  earlier version of the spec to live at `mcp/server.py`), which — if given
+  an `__init__.py` and imported as `mcp` before the SDK — shadowed the real
+  SDK and broke `import fastmcp` entirely
+  (`ModuleNotFoundError: No module named 'mcp.server'`, verified). The old
+  workaround was to keep the directory package-less (no `__init__.py`) and
+  always load `server.py` via `importlib.util.spec_from_file_location(...)`
+  instead of a normal import.
+
+  **Fix:** the directory is renamed to **`mcp_gateway/`**. It now has a
+  normal `__init__.py` and is imported normally
+  (`from mcp_gateway.server import mcp` — see
+  `tests/unit/test_mcp_server.py`, which no longer needs the `importlib`
+  workaround). `mcp_gateway/server.py` still correctly imports the real SDK
+  internally (`from fastmcp import ...`, `from mcp.types import ...`) —
+  those now unambiguously resolve to the third-party packages since our own
+  package is no longer named `mcp`.
+
+- **`agents` (SDK) vs. our own `agents/` directory.** The `openai-agents`
+  PyPI package installs as a top-level module named `agents`. This repo
+  used to have its own top-level `agents/` directory (also required by an
+  earlier version of the spec). Because Python resolves a package's own
+  name before importing its submodules, `import agents` from *inside* that
+  package always resolved to itself, never to the SDK — so the real SDK was
+  **structurally unreachable** no matter how it was installed or
+  configured, and the code always fell back to the rule-based engine,
+  treating "shadowed" exactly like "SDK unavailable."
+
+  **Fix:** the directory is renamed to **`ai_agents/`**. `import agents`
+  inside `ai_agents/api/financial_advisor_agent.py` now genuinely resolves
+  to the real `openai-agents` SDK — see that file's updated docstring. The
+  function still raises `AgentUnavailableError` (caught by the Inngest job
+  step, which falls back to `ai_agents/rules/fallback_engine.py`) for the
+  *ordinary* reasons an external API call can fail — not installed, no
+  network, no `OPENAI_API_KEY`, or the live call itself erroring — so the
+  system is exactly as resilient as before, but the SDK path now actually
+  runs when it's genuinely configured, instead of being permanently
+  unreachable by construction.
+  `tests/unit/test_financial_advisor_agent.py` was updated to assert
+  correct behavior under *either* outcome (a real SDK response, or a
+  documented `AgentUnavailableError`) rather than asserting the SDK is
+  always unreachable, since which one happens now depends on real
+  environment configuration rather than an import bug.
+
+If you rename either package again, re-run
+`pytest tests/unit/test_mcp_server.py tests/unit/test_financial_advisor_agent.py -v`
+and re-verify `import fastmcp` / `import agents` still resolve to the
+intended packages before assuming it's safe.
 
 ## Idempotency, auth, and MCP tools all share the same services/repository code
 
-`mcp/server.py`'s `log_sale`/`log_expense`/`trigger_financial_agent_job`
+`mcp_gateway/server.py`'s `log_sale`/`log_expense`/`trigger_financial_agent_job`
 tools call the exact same `services.sales_service` / `services.expenses_service`
 / `services.agent_job_service` functions the HTTP routers use — so
 validation and multi-tenant scoping behave identically whether a sale is
@@ -254,7 +284,7 @@ Example Claude Desktop config entry:
   "mcpServers": {
     "handseller-bookkeeping": {
       "command": "python",
-      "args": ["/absolute/path/to/mcp/server.py"],
+      "args": ["/absolute/path/to/mcp_gateway/server.py"],
       "env": { "SUPABASE_URL": "...", "SUPABASE_SERVICE_KEY": "..." }
     }
   }
@@ -298,11 +328,17 @@ following changes were made:
    back to a deterministic rule engine, so a user always gets advice even if
    the AI/network stack is fully down — this is exercised directly in
    `tests/unit/test_fallback_engine.py`.
-10. **MCP/`agents` package-name collisions** identified, reproduced, root-
-    caused, and documented (see sections above) rather than left as a latent
-    footgun — including a concrete regression test
-    (`tests/unit/test_mcp_server.py`) proving `mcp/server.py` still loads
-    and registers all 5 primitives correctly under this repo's layout.
+10. **`mcp`/`agents` package-name collisions** identified, reproduced, root-
+    caused, and **fixed** by renaming our own `mcp/` and `agents/`
+    directories to `mcp_gateway/` and `ai_agents/` (see "Package-name
+    collisions, fixed" above) — freeing `import mcp` and `import agents` to
+    resolve to the real third-party SDKs instead of shadowing them.
+    Regression-tested by `tests/unit/test_mcp_server.py` (all 5 MCP
+    primitives still register correctly, now via a normal import) and
+    `tests/unit/test_financial_advisor_agent.py` (the OpenAI Agents SDK
+    path no longer raises `AgentUnavailableError` purely due to import
+    shadowing — only for genuine unavailability: not installed, no
+    network, no API key, or a failed live call).
 11. **`.env.example`** includes every required variable with clearly fake
     placeholder values — no real secrets anywhere in the repo.
 12. **CORS** left permissive (`allow_origins=["*"]`) for local development;

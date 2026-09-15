@@ -14,7 +14,7 @@
   `GET /health`.
 - Default `CMD` runs the FastAPI app via `uvicorn`; the same image can run
   the MCP stdio server instead by overriding `CMD` to
-  `python mcp/server.py`.
+  `python mcp_gateway/server.py`.
 
 **`docker-compose.yml`** — four services:
 
