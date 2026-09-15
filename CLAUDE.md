@@ -68,38 +68,53 @@ Do not do this even under time pressure or when asked to "just make it work":
    don't cache error responses (5xx) as if they were successful (the
    middleware already avoids this; keep it that way if you touch it).
 
-5. **Agent/system prompts live in `agents/prompts/*.md`, never as Python
+5. **Agent/system prompts live in `ai_agents/prompts/*.md`, never as Python
    string literals.** If you're tempted to inline a prompt string in
-   `agents/api/` or `jobs/`, stop — add or edit a `.md` file and load it via
-   `agents/prompt_loader.py` instead.
+   `ai_agents/api/` or `jobs/`, stop — add or edit a `.md` file and load it
+   via `ai_agents/prompt_loader.py` instead.
 
-## Two package-name collisions — read before touching imports
+## Two package-name collisions — FIXED by renaming, read before undoing that
 
-These are real, previously-reproduced bugs, not theoretical:
+These were real, previously-reproduced bugs, not theoretical — and they are
+now **fixed**, not worked around. Both fixes were the same shape: this
+repo's own package had the same name as a required third-party SDK, so
+Python's own package always shadowed the SDK. Renaming our package (not
+the SDK) fixed it permanently.
 
-- **`mcp/` (this repo's directory) vs. the `mcp` PyPI package** (a dependency
-  of `fastmcp`). If `mcp/` ever gets an `__init__.py` and gets imported as a
-  package before the real `mcp` SDK is imported, `import fastmcp` breaks with
-  `ModuleNotFoundError: No module named 'mcp.server'`. **Do not add
-  `mcp/__init__.py`.** Never write `from mcp.server import ...` or
-  `import mcp.server` elsewhere in the codebase — always run
-  `mcp/server.py` as a script, or load it via `importlib.util` (see
-  `tests/unit/test_mcp_server.py` for the pattern) if you need to test it.
+- **`mcp` PyPI package (a dependency of `fastmcp`) vs. this repo's own
+  directory.** Used to be `mcp/`, which — if given an `__init__.py` and
+  imported as `mcp` before the real SDK — broke `import fastmcp` entirely
+  (`ModuleNotFoundError: No module named 'mcp.server'`, verified). **Fixed:
+  the directory is now `mcp_gateway/`.** It has a normal `__init__.py` and
+  is imported normally (`from mcp_gateway.server import mcp`, `python
+  mcp_gateway/server.py`). `mcp_gateway/server.py`'s own
+  `from mcp.types import ...` and `from fastmcp import ...` now correctly
+  resolve to the real SDK. **Do not rename this directory back to `mcp/`
+  or give any directory literally named `mcp/` an `__init__.py`** in this
+  repo — that reintroduces the exact collision.
 
-- **`agents/` (this repo's directory) vs. the `openai-agents` PyPI package**,
-  which also installs as a top-level `agents` module. From *inside* this
-  repo's own `agents/` package, `import agents` always resolves to itself
-  (Python resolves the parent package first), so the real SDK is effectively
-  never reachable from within `agents/api/financial_advisor_agent.py` as
-  currently structured. The code treats this exactly like "SDK unavailable"
-  and falls back to `agents/rules/fallback_engine.py`. If you need the real
-  SDK to actually run (not just fall back), it requires a process/venv
-  boundary where `agents/` (this repo) isn't what `import agents` resolves
-  to — e.g. run the agent-calling code as a separate service, or rename one
-  of the two packages. Don't "fix" this by adding sys.path hacks inside the
-  request path; that's a maintenance trap. Escalate to a real architectural
-  decision instead (rename this repo's package, or isolate the SDK call in
-  its own process) if you need the live SDK working end-to-end.
+- **`agents` PyPI package (`openai-agents`) vs. this repo's own
+  directory.** Used to be `agents/`, which meant `import agents` from
+  *inside* that same package always resolved to itself (Python resolves a
+  package's own name before importing its submodules) — the real SDK was
+  **structurally unreachable**, permanently, regardless of installation or
+  API key configuration. **Fixed: the directory is now `ai_agents/`.**
+  `import agents` inside `ai_agents/api/financial_advisor_agent.py` now
+  genuinely resolves to the real `openai-agents` SDK.
+  `run_financial_advisor` still raises `AgentUnavailableError` (caught by
+  the Inngest job step, which falls back to
+  `ai_agents/rules/fallback_engine.py`) — but now only for *ordinary*
+  reasons an external API can fail: not installed, no network, no
+  `OPENAI_API_KEY`, or the live call itself erroring. **Do not rename this
+  directory back to `agents/`** — that reintroduces the exact collision and
+  makes the SDK unreachable again.
+
+If you ever need to rename either package again (or add a new package that
+might collide with a third-party import), verify with
+`python -c "import agents; print(agents.__file__)"` /
+`python -c "import mcp; print(mcp.__file__)"` that the import resolves to
+the third-party package's site-packages path, not somewhere inside this
+repo, before trusting anything downstream of that import.
 
 ## Before you touch specific things
 
@@ -116,10 +131,16 @@ These are real, previously-reproduced bugs, not theoretical:
   README's "Inngest integration assumptions"). Re-verify against the
   installed version's actual signatures rather than assuming the README's
   snippet still matches after a dependency bump.
-- **Changing `mcp/server.py`**: keep it runnable as a standalone script
-  and re-run `pytest tests/unit/test_mcp_server.py -v` to confirm all 5 MCP
-  primitives (tools, the `ledger://` resource, the `financial_audit` prompt,
-  sampling, logging) are still registered correctly.
+- **Changing `mcp_gateway/server.py`**: keep it runnable as a standalone
+  script (`python mcp_gateway/server.py`) and re-run
+  `pytest tests/unit/test_mcp_server.py -v` to confirm all 5 MCP primitives
+  (tools, the `ledger://` resource, the `financial_audit` prompt, sampling,
+  logging) are still registered correctly.
+- **Changing `ai_agents/api/financial_advisor_agent.py`**: re-run
+  `pytest tests/unit/test_financial_advisor_agent.py -v` and confirm
+  `import agents` still resolves to the real `openai-agents` SDK (see the
+  package-collision section above) — don't reintroduce a local package
+  named `agents` anywhere that could shadow it again.
 - **Adding a new mutating endpoint**: it must (a) require and honor
   `Idempotency-Key` (automatic via the middleware, don't opt out), (b) go
   through a service, (c) have its repository calls scoped by `id`+`org_id`
@@ -154,7 +175,7 @@ docker compose up --build
 # or: uvicorn app.main:app --reload
 
 # run the MCP server standalone
-python mcp/server.py
+python mcp_gateway/server.py
 ```
 
 Never commit a filled-in `.env` — only `.env.example` with placeholder

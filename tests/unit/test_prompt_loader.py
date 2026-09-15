@@ -1,6 +1,6 @@
 import pytest
 
-from agents.prompt_loader import load_prompt
+from ai_agents.prompt_loader import load_prompt
 
 
 def test_load_prompt_returns_content():

@@ -1,4 +1,4 @@
-"""Loads agent/system prompts from `agents/prompts/*.md` — never hardcoded in Python."""
+"""Loads agent/system prompts from `ai_agents/prompts/*.md` — never hardcoded in Python."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,7 +7,7 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 
 
 def load_prompt(name: str, **format_kwargs) -> str:
-    """Load `agents/prompts/{name}.md` and optionally `.format(**format_kwargs)` it.
+    """Load `ai_agents/prompts/{name}.md` and optionally `.format(**format_kwargs)` it.
 
     `.format()` is only applied when format_kwargs is non-empty, so prompts
     containing literal `{` `}` (e.g. JSON examples) stay safe by default.

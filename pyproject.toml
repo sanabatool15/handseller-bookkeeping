@@ -35,4 +35,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["app", "routers", "services", "repository", "middleware", "jobs", "mcp", "agents"]
+packages = ["app", "routers", "services", "repository", "middleware", "jobs", "mcp_gateway", "ai_agents"]

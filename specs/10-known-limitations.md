@@ -29,7 +29,7 @@ failure mode you actually want.
 ## 2. MCP Sampling and Logging primitives aren't exercised end-to-end
 
 `summarize_ledger_via_client_llm` (sampling) and the logging calls
-(`ctx.log`/`ctx.error`) throughout `mcp/server.py` are implemented against
+(`ctx.log`/`ctx.error`) throughout `mcp_gateway/server.py` are implemented against
 the documented `fastmcp`/MCP protocol shape and covered by
 `tests/unit/test_mcp_server.py` for correct *registration* — but both are
 inherently interactive, client-driven features (a real connected MCP
@@ -100,7 +100,7 @@ dual-scheme verify-then-upgrade migration if/when this changes.
 ## 8. Inngest and FastMCP integration assumptions are version-pinned observations, not guarantees
 
 Both `jobs/inngest_client.py`/`jobs/financial_agent_job.py` (verified
-against `inngest==0.5.19`) and `mcp/server.py` (verified against
+against `inngest==0.5.19`) and `mcp_gateway/server.py` (verified against
 `fastmcp==4.0.3`) document the exact API shapes they were built and tested
 against by actually installing those versions and inspecting real
 signatures — not guessed from documentation. If you upgrade either
