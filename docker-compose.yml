@@ -1,0 +1,59 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  inngest:
+    image: inngest/inngest:latest
+    command: ["inngest", "dev", "-u", "http://api:8000/api/inngest", "--host", "0.0.0.0"]
+    ports:
+      - "8288:8288"
+    depends_on:
+      - api
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_DEV: "1"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  inngest-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # The Inngest Python SDK is invoked (not polled): the "worker" here is the
+    # same FastAPI process serving /api/inngest, which the Inngest dev server
+    # calls into for each step. This second service is provided for parity
+    # with deployments that split API traffic from Inngest-invoked traffic
+    # behind different scaling policies; both run the identical image.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      INNGEST_BASE_URL: http://inngest:8288
+      INNGEST_DEV: "1"
+    depends_on:
+      redis:
+        condition: service_healthy
