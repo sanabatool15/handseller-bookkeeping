@@ -23,7 +23,10 @@ class Settings(BaseSettings):
 
     # Inngest
     inngest_event_key: str = "local-dev-event-key"
-    inngest_signing_key: str = "local-dev-signing-key"
+    # Must satisfy the inngest SDK's hash_signing_key(): a "signkey-<word>-"
+    # prefix (stripped) followed by a valid hex string, even in dev mode
+    # (fetch_with_auth_fallback hashes it unconditionally whenever it's set).
+    inngest_signing_key: str = "signkey-test-00000000000000000000000000000000000000000000000000000000000000"
     inngest_base_url: str = "http://localhost:8288"
     inngest_dev: bool = True
 

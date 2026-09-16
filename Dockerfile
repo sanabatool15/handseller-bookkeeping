@@ -9,6 +9,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
+COPY app ./app
+COPY routers ./routers
+COPY services ./services
+COPY repository ./repository
+COPY middleware ./middleware
+COPY jobs ./jobs
+COPY mcp_gateway ./mcp_gateway
+COPY ai_agents ./ai_agents
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --upgrade pip \
