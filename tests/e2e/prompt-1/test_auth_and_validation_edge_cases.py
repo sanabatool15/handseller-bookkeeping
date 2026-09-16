@@ -32,7 +32,7 @@ def test_login_with_wrong_password_rejected(client):
 
     resp = client.post(
         "/auth/login",
-        json={"email": "wrongpass@example.com", "password": "not-the-right-password"},
+        json={"email": "sbatool6678@gmail.com", "password": "not-the-right-password"},
         headers={"Idempotency-Key": "wrongpass-login"},
     )
     assert resp.status_code == 401
