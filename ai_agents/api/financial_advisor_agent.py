@@ -21,9 +21,16 @@ from __future__ import annotations
 
 import json
 from typing import Any
-
+from dotenv import load_dotenv
+import os
 from ai_agents.prompt_loader import load_prompt
 
+
+load_dotenv()
+
+API_KEY = os.getenv("OPENAI_API_KEY")
+BASE_URL = os.getenv("OPENAI_API_BASE_URL")
+MODEL     = os.getenv("OPENAI_MODEL")
 try:
     from agents import Agent as _SdkAgent
     from agents import Runner as _SdkRunner
@@ -59,6 +66,9 @@ async def run_financial_advisor(monthly_summary: dict[str, Any]) -> str:
     agent = _SdkAgent(
         name="FinancialAdvisor",
         instructions=system_prompt,
+        api_key=API_KEY,
+        base_url=BASE_URL,
+        model=MODEL
     )
     user_message = (
         "Here is this month's financial summary as JSON:\n"

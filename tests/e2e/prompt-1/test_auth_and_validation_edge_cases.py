@@ -17,7 +17,7 @@ def test_duplicate_email_registration_rejected(client):
     resp = client.post(
         "/auth/register",
         json={
-            "email": "dup@example.com",
+            "email": "sbatool6678@gmail.com",
             "password": "anotherpass1",
             "full_name": "Someone Else",
             "org_name": "Another Co",
