@@ -92,8 +92,10 @@ from documentation alone:
 
 - `inngest.Inngest(app_id=..., event_key=..., signing_key=..., is_production=...)`
 - `client.create_function(fn_id=..., name=..., trigger=inngest.TriggerEvent(event=...), retries=...)` → decorator
-- Handler signature: `async def handler(ctx: inngest.Context, step: inngest.Step)`
-- `step.run(step_id, async_callable)` — memoized
+- Handler signature: `async def handler(ctx: inngest.Context)` — a single
+  argument; there is no separate `step` parameter. Step methods are called
+  via `ctx.step` (`Context` is a dataclass whose `step` field holds them).
+- `ctx.step.run(step_id, async_callable)` — memoized
 - `inngest.fast_api.serve(app, client, functions, serve_path="/api/inngest")` —
   mounts the routes Inngest's dev server / cloud needs to call into
 

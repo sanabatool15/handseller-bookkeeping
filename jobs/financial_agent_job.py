@@ -8,10 +8,14 @@ persist progress to `agent_jobs`/`agent_logs` in Postgres (per the spec), so
 job state is visible to the rest of the app (e.g. a status-polling endpoint)
 independently of Inngest's internal step cache.
 
-Assumption (documented): pinned against the `inngest` PyPI package's 0.5.x
-API — `ctx.step.run(step_id, async_handler)`, function definition via
-`inngest_client.create_function(trigger=..., fn_id=...)(handler)`, and the
-handler signature `async def handler(ctx: inngest.Context, step: inngest.Step)`.
+Verified against the installed `inngest==0.5.19` package's real source
+(`inngest._internal.execution_lib.models.Context`, and
+`Inngest.create_function`'s handler parameter type,
+`Callable[[Context], Awaitable[T]]`): the handler takes a **single**
+`ctx: inngest.Context` argument — there is no separate `step` parameter.
+Step methods are called via `ctx.step.run(...)`, since `Context` is a
+dataclass whose `step` field holds the `Step` methods. Function definition
+is still `inngest_client.create_function(trigger=..., fn_id=...)(handler)`.
 Older/newer SDK versions may differ slightly; see README "Inngest assumptions".
 """
 from __future__ import annotations
@@ -75,23 +79,7 @@ async def _step_finalize(job_id: str, org_id: str, result: dict[str, Any]) -> di
     return result
 
 
-@inngest_client.create_function(
-    fn_id="financial-advisor-job",
-    name="Financial Advisor Background Job",
-    trigger=inngest.TriggerEvent(event=EVENT_NAME),
-    retries=3,
-)
-async def financial_advisor_job(ctx: inngest.Context, step: inngest.Step) -> dict[str, Any]:
-    job_id = ctx.event.data["job_id"]
-    org_id = ctx.event.data["org_id"]
-
-    summary = await step.run("gather-data", lambda: _step_gather_data(job_id, org_id))
-    agent_result = await step.run("run-agent", lambda: _step_run_agent(job_id, org_id, summary))
-    final = await step.run("finalize", lambda: _step_finalize(job_id, org_id, agent_result))
-    return final
-
-
-async def on_failure_handler(ctx: inngest.Context, step: inngest.Step) -> None:
+async def on_failure_handler(ctx: inngest.Context) -> None:
     """Registered via on_failure so exhausted retries still mark the job failed."""
     db = get_supabase()
     job_id = ctx.event.data.get("job_id")
@@ -101,6 +89,23 @@ async def on_failure_handler(ctx: inngest.Context, step: inngest.Step) -> None:
             db, job_id=job_id, org_id=org_id, status="failed",
             error_details={"message": "All retries exhausted", "event": ctx.event.data},
         )
+
+
+@inngest_client.create_function(
+    fn_id="financial-advisor-job",
+    name="Financial Advisor Background Job",
+    trigger=inngest.TriggerEvent(event=EVENT_NAME),
+    retries=3,
+    on_failure=on_failure_handler,
+)
+async def financial_advisor_job(ctx: inngest.Context) -> dict[str, Any]:
+    job_id = ctx.event.data["job_id"]
+    org_id = ctx.event.data["org_id"]
+
+    summary = await ctx.step.run("gather-data", lambda: _step_gather_data(job_id, org_id))
+    agent_result = await ctx.step.run("run-agent", lambda: _step_run_agent(job_id, org_id, summary))
+    final = await ctx.step.run("finalize", lambda: _step_finalize(job_id, org_id, agent_result))
+    return final
 
 
 ALL_FUNCTIONS = [financial_advisor_job]
