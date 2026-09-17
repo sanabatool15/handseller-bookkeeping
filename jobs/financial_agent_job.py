@@ -21,9 +21,12 @@ Older/newer SDK versions may differ slightly; see README "Inngest assumptions".
 from __future__ import annotations
 
 import datetime as dt
+import logging
 from typing import Any
 
 import inngest
+
+logger = logging.getLogger(__name__)
 
 from app.clients import get_supabase
 from jobs.inngest_client import inngest_client
@@ -51,10 +54,13 @@ async def _step_gather_data(job_id: str, org_id: str) -> dict[str, Any]:
 
 async def _step_run_agent(job_id: str, org_id: str, summary: dict[str, Any]) -> dict[str, Any]:
     db = get_supabase()
+    fallback_reason: str | None = None
     try:
         advice = await run_financial_advisor(summary)
         source = "openai_agent"
-    except Exception:  # noqa: BLE001 - deliberate fallback on ANY agent/API failure
+    except Exception as exc:  # noqa: BLE001 - deliberate fallback on ANY agent/API failure
+        fallback_reason = f"{type(exc).__name__}: {exc}"
+        logger.warning("Falling back to rule-based advice for job %s: %s", job_id, fallback_reason)
         advice = rule_based_financial_advice(summary)
         source = "rule_based_fallback"
 
@@ -62,7 +68,7 @@ async def _step_run_agent(job_id: str, org_id: str, summary: dict[str, Any]) -> 
     agent_jobs_repository.add_log(
         db, job_id=job_id, step_name="run_agent",
         action_summary=f"Generated financial advice via {source}.",
-        insights_generated=result,
+        insights_generated={**result, "fallback_reason": fallback_reason} if fallback_reason else result,
     )
     agent_jobs_repository.update_job_status(db, job_id=job_id, org_id=org_id, status="processing", current_step="run_agent")
     return result

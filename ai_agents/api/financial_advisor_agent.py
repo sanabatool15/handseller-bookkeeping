@@ -20,6 +20,7 @@ environment.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any
 from dotenv import load_dotenv
 import os
@@ -28,12 +29,26 @@ from ai_agents.prompt_loader import load_prompt
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 API_KEY = os.getenv("OPENAI_API_KEY")
 BASE_URL = os.getenv("OPENAI_API_BASE_URL")
 MODEL     = os.getenv("OPENAI_MODEL")
 try:
     from agents import Agent as _SdkAgent
     from agents import Runner as _SdkRunner
+    from agents import set_default_openai_client as _set_default_openai_client
+    from openai import AsyncOpenAI as _AsyncOpenAI
+
+    # Agent(...) itself has no api_key/base_url kwargs (verified against the
+    # installed openai-agents package: Agent.__init__ only accepts a `model`
+    # string/Model, not api_key/base_url). A custom endpoint (e.g. OpenRouter)
+    # must be configured via a client set as the SDK's default instead.
+    if API_KEY and BASE_URL:
+        _set_default_openai_client(
+            _AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL),
+            use_for_tracing=False,  # tracing uploads go to OpenAI's own API, not OpenRouter
+        )
 
     _sdk_available = True
 except ImportError:
@@ -66,9 +81,7 @@ async def run_financial_advisor(monthly_summary: dict[str, Any]) -> str:
     agent = _SdkAgent(
         name="FinancialAdvisor",
         instructions=system_prompt,
-        api_key=API_KEY,
-        base_url=BASE_URL,
-        model=MODEL
+        model=MODEL,
     )
     user_message = (
         "Here is this month's financial summary as JSON:\n"
@@ -79,7 +92,8 @@ async def run_financial_advisor(monthly_summary: dict[str, Any]) -> str:
     try:
         result = await _SdkRunner.run(agent, user_message)
     except Exception as exc:  # noqa: BLE001 - any SDK/network/auth failure
-        raise AgentUnavailableError(f"Agent run failed: {exc}") from exc
+        logger.exception("Financial advisor agent run failed; falling back to rule-based advice")
+        raise AgentUnavailableError(f"Agent run failed: {type(exc).__name__}: {exc}") from exc
 
     output = getattr(result, "final_output", None)
     if output is None:
