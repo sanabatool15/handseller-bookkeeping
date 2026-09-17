@@ -38,17 +38,30 @@ try:
     from agents import Agent as _SdkAgent
     from agents import Runner as _SdkRunner
     from agents import set_default_openai_client as _set_default_openai_client
+    from agents.models.openai_chatcompletions import (
+        OpenAIChatCompletionsModel as _OpenAIChatCompletionsModel,
+    )
     from openai import AsyncOpenAI as _AsyncOpenAI
 
     # Agent(...) itself has no api_key/base_url kwargs (verified against the
     # installed openai-agents package: Agent.__init__ only accepts a `model`
     # string/Model, not api_key/base_url). A custom endpoint (e.g. OpenRouter)
-    # must be configured via a client set as the SDK's default instead.
-    if API_KEY and BASE_URL:
-        _set_default_openai_client(
-            _AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL),
-            use_for_tracing=False,  # tracing uploads go to OpenAI's own API, not OpenRouter
-        )
+    # must be configured via a client passed explicitly instead.
+    #
+    # Also: Runner.run() builds its own MultiProvider internally when Agent's
+    # `model` is a bare string, and MultiProvider parses any "/" in the model
+    # name as "<prefix>/<model>", erroring with UserError("Unknown prefix: ...")
+    # for any prefix it doesn't recognize (verified against the installed
+    # package's MultiProvider._resolve_prefixed_model — only "openai",
+    # "litellm", "any-llm" are built in). OpenRouter model IDs are commonly
+    # namespaced like "inclusionai/<model>", which isn't one of those, so a
+    # bare string silently mis-routes and fails. Passing an explicit
+    # OpenAIChatCompletionsModel(model=..., openai_client=...) instead makes
+    # Agent.model a Model object, bypassing MultiProvider's prefix parsing
+    # entirely and sending the model string to our own client as-is.
+    _openai_client = _AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL) if API_KEY and BASE_URL else None
+    if _openai_client is not None:
+        _set_default_openai_client(_openai_client, use_for_tracing=False)
 
     _sdk_available = True
 except ImportError:
@@ -81,7 +94,11 @@ async def run_financial_advisor(monthly_summary: dict[str, Any]) -> str:
     agent = _SdkAgent(
         name="FinancialAdvisor",
         instructions=system_prompt,
-        model=MODEL,
+        model=(
+            _OpenAIChatCompletionsModel(model=MODEL, openai_client=_openai_client)
+            if _openai_client is not None
+            else MODEL
+        ),
     )
     user_message = (
         "Here is this month's financial summary as JSON:\n"
