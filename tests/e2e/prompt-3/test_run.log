@@ -1,0 +1,50 @@
+========================================================================================
+prompt-3 e2e run log — tests/e2e/prompt-3/test_run.log
+This file is fully overwritten at the start of every run.
+========================================================================================
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_duplicate_email_registration_is_rejected] --- starting tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_duplicate_email_registration_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_duplicate_email_registration_is_rejected] Registering user 'e2e-dup-email-8ec32c7aac@example.com' for org 'Org-dup-email'
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_duplicate_email_registration_is_rejected] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_duplicate_email_registration_is_rejected] --- finished tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_duplicate_email_registration_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_login_with_wrong_password_is_rejected] --- starting tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_login_with_wrong_password_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_login_with_wrong_password_is_rejected] Registering user 'e2e-wrong-pw-2668fd7f57@example.com' for org 'Org-wrong-pw'
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_login_with_wrong_password_is_rejected] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_login_with_wrong_password_is_rejected] --- finished tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_login_with_wrong_password_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_unauthenticated_request_to_protected_route_is_rejected] --- starting tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_unauthenticated_request_to_protected_route_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_unauthenticated_request_to_protected_route_is_rejected] GETing /sales with NO Authorization header -- expecting rejection
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_unauthenticated_request_to_protected_route_is_rejected] Asserting status 401 -- got it. Unauthenticated-request scenario complete.
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_unauthenticated_request_to_protected_route_is_rejected] --- finished tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_unauthenticated_request_to_protected_route_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_malformed_bearer_token_is_rejected] --- starting tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_malformed_bearer_token_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_malformed_bearer_token_is_rejected] GETing /sales with a malformed bearer token -- expecting rejection
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_malformed_bearer_token_is_rejected] Asserting status 401 -- got it. Malformed-token scenario complete.
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_malformed_bearer_token_is_rejected] --- finished tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_malformed_bearer_token_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_sale_amount_is_rejected] --- starting tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_sale_amount_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_sale_amount_is_rejected] Registering user 'e2e-nonpos-sale-28521037f0@example.com' for org 'Org-nonpos-sale'
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_sale_amount_is_rejected] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_sale_amount_is_rejected] --- finished tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_sale_amount_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_expense_amount_is_rejected] --- starting tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_expense_amount_is_rejected ---
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_expense_amount_is_rejected] Registering user 'e2e-nonpos-expense-28c39ddec6@example.com' for org 'Org-nonpos-expense'
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_expense_amount_is_rejected] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_expense_amount_is_rejected] --- finished tests/e2e/prompt-3/test_auth_and_validation_edge_cases.py::test_non_positive_expense_amount_is_rejected ---
+[tests/e2e/prompt-3/test_bookkeeping_lifecycle_journey.py::test_full_bookkeeping_lifecycle] --- starting tests/e2e/prompt-3/test_bookkeeping_lifecycle_journey.py::test_full_bookkeeping_lifecycle ---
+[tests/e2e/prompt-3/test_bookkeeping_lifecycle_journey.py::test_full_bookkeeping_lifecycle] Registering user 'e2e-lifecycle-9f74e87684@example.com' for org 'Org-lifecycle'
+[tests/e2e/prompt-3/test_bookkeeping_lifecycle_journey.py::test_full_bookkeeping_lifecycle] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_bookkeeping_lifecycle_journey.py::test_full_bookkeeping_lifecycle] --- finished tests/e2e/prompt-3/test_bookkeeping_lifecycle_journey.py::test_full_bookkeeping_lifecycle ---
+[tests/e2e/prompt-3/test_cross_tenant_isolation_journey.py::test_cross_tenant_isolation] --- starting tests/e2e/prompt-3/test_cross_tenant_isolation_journey.py::test_cross_tenant_isolation ---
+[tests/e2e/prompt-3/test_cross_tenant_isolation_journey.py::test_cross_tenant_isolation] Setting up two separate orgs: A and B
+[tests/e2e/prompt-3/test_cross_tenant_isolation_journey.py::test_cross_tenant_isolation] Registering user 'e2e-tenant-a-aa3a0adfd3@example.com' for org 'Org-tenant-a'
+[tests/e2e/prompt-3/test_cross_tenant_isolation_journey.py::test_cross_tenant_isolation] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_cross_tenant_isolation_journey.py::test_cross_tenant_isolation] --- finished tests/e2e/prompt-3/test_cross_tenant_isolation_journey.py::test_cross_tenant_isolation ---
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_retried_creates_exactly_one_row_and_replays_response] --- starting tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_retried_creates_exactly_one_row_and_replays_response ---
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_retried_creates_exactly_one_row_and_replays_response] Registering user 'e2e-idem-retry-45d5e17609@example.com' for org 'Org-idem-retry'
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_retried_creates_exactly_one_row_and_replays_response] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_retried_creates_exactly_one_row_and_replays_response] --- finished tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_retried_creates_exactly_one_row_and_replays_response ---
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_missing_idempotency_key_is_rejected] --- starting tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_missing_idempotency_key_is_rejected ---
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_missing_idempotency_key_is_rejected] Registering user 'e2e-idem-missing-82d4385460@example.com' for org 'Org-idem-missing'
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_missing_idempotency_key_is_rejected] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_missing_idempotency_key_is_rejected] --- finished tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_missing_idempotency_key_is_rejected ---
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_across_two_orgs_does_not_collide] --- starting tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_across_two_orgs_does_not_collide ---
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_across_two_orgs_does_not_collide] Setting up two separate orgs, A and B, that will reuse the SAME Idempotency-Key
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_across_two_orgs_does_not_collide] Registering user 'e2e-idem-org-a-9f83dc0787@example.com' for org 'Org-idem-org-a'
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_across_two_orgs_does_not_collide] === teardown: deleting everything this test created ===
+[tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_across_two_orgs_does_not_collide] --- finished tests/e2e/prompt-3/test_idempotent_retry_journey.py::test_same_key_across_two_orgs_does_not_collide ---
