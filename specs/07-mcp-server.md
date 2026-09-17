@@ -73,68 +73,13 @@ performs the inference, and this server only supplies the data and the
 question. This is the correct cost/ownership model for a tool meant to be
 used by many different external clients.
 
-## The `mcp` package-name collision — FIXED by renaming to `mcp_gateway/`
+## The `mcp` package-name collision — fixed
 
-This was a real, previously reproduced problem (not theoretical), and it
-is now fixed rather than merely worked around.
-
-**The problem:** the `mcp` Python SDK (a dependency of `fastmcp`) installs
-as a top-level package also named `mcp`. This repository used to have its
-own top-level directory named `mcp/` (as an earlier version of the spec's
-directory-name requirement demanded). If that directory were an importable
-Python package (i.e. had an `__init__.py`) and got imported as `mcp`
-*before* the real SDK's `mcp` package, it would shadow the SDK entirely.
-**We verified this concretely**: with an `__init__.py` present and the
-directory resolvable as `mcp`, `import fastmcp` failed with
-`ModuleNotFoundError: No module named 'mcp.server'`, because `fastmcp`
-internally does `from mcp.server import ...` and got this repo's own
-`mcp/server.py` instead of the SDK's.
-
-**Old workaround (no longer in place):** the directory was kept
-deliberately package-less (no `__init__.py`), so it was never actually
-importable as `mcp` at all — `server.py` was always either run directly as
-a script, or loaded in tests via
-`importlib.util.spec_from_file_location(...)` under a distinct module
-name, sidestepping normal package import resolution entirely. This worked,
-but meant the server could never be imported normally
-(`from mcp.server import mcp` was permanently off-limits), which is an
-awkward, easy-to-violate-by-accident constraint to carry forward
-indefinitely.
-
-**The fix, applied:** the directory was renamed from `mcp/` to
-**`mcp_gateway/`**. There is no longer any local directory literally named
-`mcp` anywhere in this repository, so:
-
-- `mcp_gateway/` now has a normal `__init__.py` and is a normal importable
-  Python package.
-- `mcp_gateway/server.py` is imported normally —
-  `tests/unit/test_mcp_server.py` now does
-  `from mcp_gateway import server as mcp_module` instead of the old
-  `importlib.util` workaround.
-- `mcp_gateway/server.py`'s own third-party imports (`from fastmcp import
-  Context, FastMCP`, and `from mcp.types import SamplingMessage,
-  TextContent` inside `summarize_ledger_via_client_llm`) now unambiguously
-  resolve to the real third-party packages, since our own package is no
-  longer named `mcp` and can't shadow them.
-- The old manual `sys.path` bootstrap that used to be needed to make
-  `mcp/server.py` runnable as a bare script (inserting the repo root onto
-  `sys.path` at the top of the file) is no longer needed for the package
-  itself to import correctly, though `python mcp_gateway/server.py` as a
-  direct script invocation is still the documented way to run it standalone
-  (see "Running it" below).
-
-**Why renaming was the right fix:** the old package-less-directory
-workaround was correct but brittle — it worked only as long as *nothing*
-ever imported the directory as a package, a constraint that's easy to
-accidentally violate (e.g. someone adding an `__init__.py` "to make the
-IDE happy" months later, not knowing why it was missing). Renaming the
-directory removes the constraint at its root instead of relying on every
-future contributor remembering a rule.
-
-**Do not rename this package back to `mcp/`, and do not create any other
-directory literally named `mcp` with an `__init__.py` in this repo** —
-either would reintroduce the exact collision and silently break
-`import fastmcp` throughout the app.
+This directory was renamed from `mcp/` to `mcp_gateway/` to resolve a name
+collision with the third-party `mcp` SDK (a dependency of `fastmcp`, which
+also installs as a top-level `mcp` package). This is fixed — do not rename
+it back, and do not create any other directory literally named `mcp` with
+an `__init__.py` in this repo.
 
 ## Running it
 

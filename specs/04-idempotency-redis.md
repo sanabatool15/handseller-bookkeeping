@@ -35,36 +35,19 @@ attempt.
 
 ## Why we did it
 
-Two things drove this design, both traced to a concrete problem in an
-earlier version of this project:
+**Duplicate submissions are a real bookkeeping bug, not a hypothetical.**
+A handseller on a flaky mobile connection retrying a "log this sale" POST
+after a timeout must not end up with the same sale recorded twice — that
+directly corrupts the books. Some mechanism to deduplicate retried requests
+is required.
 
-1. **Duplicate submissions are a real bookkeeping bug, not a hypothetical.**
-   A handseller on a flaky mobile connection retrying a "log this sale"
-   POST after a timeout must not end up with the same sale recorded twice
-   — that directly corrupts the books. Some verification mechanism against
-   retried requests was always going to be required.
-
-2. **`variant-3`'s first attempt at solving this used row-level database
-   locks inside synchronous endpoint handlers** to prevent duplicate writes.
-   This caused real connection/latency problems: a lock held inside a
-   request handler ties up a database connection for the request's full
-   duration, and under retries (the exact scenario this was meant to
-   handle) that turns into lock contention and connection-pool starvation —
-   the fix made concurrent request handling *worse*, not better.
-
-3. **`variant-4`'s next attempt moved to an `idempotency_keys` Postgres
-   table** (insert-with-unique-constraint per request). This correctly
-   avoided row locks, but still put a synchronous database round-trip
-   (an INSERT, hitting a UNIQUE constraint on retries) on the hot path of
-   every single mutating request — including ones that aren't being
-   retried at all. Every `POST /sales` paid a DB-write cost purely for
-   deduplication bookkeeping.
-
-Redis solves both problems: it's an in-memory key-value store built
+Redis is the right tool for this: it's an in-memory key-value store built
 exactly for this kind of high-frequency, short-TTL, read-heavy-on-repeat
-workload. A cache hit/miss check is a single fast Redis round-trip instead
-of a Postgres write, and the `SET NX` lock primitive gives us safe
-concurrent-request handling without holding a database row lock at all.
+workload. A cache hit/miss check is a single fast Redis round-trip rather
+than a Postgres write on the hot path of every mutating request, and the
+`SET NX` lock primitive gives safe concurrent-request handling without
+holding a database row lock at all — no request-handler-held DB lock, and
+no per-request DB write purely for deduplication bookkeeping.
 
 ## Why the lock (`SET NX EX 30`) in addition to the cache
 

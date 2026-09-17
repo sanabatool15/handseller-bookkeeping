@@ -30,23 +30,15 @@ information this API discloses.
 
 ## Why we did it
 
-This is the single most important fix produced by this entire prompt
-ladder, because it directly replaced a real vulnerability found in earlier
-versions of this same project:
-
-- **`variant-2`** implemented authorization as: fetch the record by `id`,
-  then check `if record.org_id != current_user.org_id: raise 403`. This
-  is the textbook "check-then-fetch" (also called IDOR — Insecure Direct
-  Object Reference) pattern. It's a vulnerability waiting to happen because
-  the fetch and the check are two separate steps in application code — any
-  future refactor, a missed code path, an added endpoint that copies 90% of
-  an existing handler and drops the check, and suddenly a query with no
-  `org_id` filter at all returns another tenant's data.
-- **`variant-3`** improved this slightly by introducing a dedicated
-  `get_ownership()` function, but it was still called as a *separate*
-  round-trip before the "real" fetch — so the vulnerability class was
-  narrowed (one central function to audit) but not eliminated (the fetch
-  itself still wasn't scoped).
+This is the single most important guarantee in the system, because it
+closes a real vulnerability class: "check-then-fetch" (also called IDOR —
+Insecure Direct Object Reference), where a record is fetched by `id` alone
+and its `org_id` is compared *afterward* in application code. That pattern
+is a vulnerability waiting to happen, because the fetch and the check are
+two separate steps — any future refactor, a missed code path, or a new
+endpoint that copies 90% of an existing handler and drops the check can
+produce a query with no `org_id` filter at all, returning another tenant's
+data.
 
 By baking `org_id` into the exact same query as the `id` filter, the
 vulnerability becomes **structurally impossible**, not just

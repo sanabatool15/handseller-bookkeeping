@@ -38,14 +38,13 @@ request. Instead:
 
 ## Why we did it
 
-Two problems, both directly observed in earlier versions of this project,
-drove this:
+Two problems drove this design:
 
 1. **Blocking the request thread on an unreliable external call is a
-   reliability bug.** `variant-4` ran the OpenAI Agents SDK call *inside*
-   the FastAPI request handler for the financial-advice endpoint. A slow
-   or failed OpenAI response meant the HTTP client (and the server's
-   request-handling thread/worker) sat blocked for the duration — for a
+   reliability bug.** Running the OpenAI Agents SDK call *inside* the
+   FastAPI request handler for the financial-advice endpoint means a slow
+   or failed OpenAI response leaves the HTTP client (and the server's
+   request-handling thread/worker) blocked for the duration — for a
    financial-advice feature that can reasonably take several seconds of
    LLM reasoning, that's an unacceptable amount of time to hold open a
    synchronous HTTP request, and it doesn't degrade gracefully under load
@@ -104,6 +103,28 @@ changes** — this isolation was intentional so a dependency bump has a
 narrow blast radius. Re-verify the actual installed API shape (don't just
 assume the snippet above still holds) before changing these files after an
 upgrade.
+
+## Known gap: no idempotency protection on the Inngest event itself
+
+The HTTP-level idempotency middleware (`04-idempotency-redis.md`) only
+guards the initial `POST /agent-jobs/financial-advice` request — it
+deduplicates repeated *HTTP* calls with the same `Idempotency-Key`. It does
+**not** protect the Inngest event that request fires. If the same
+`financial/advice.requested` event is delivered twice — an Inngest retry, a
+duplicate webhook delivery, or any other at-least-once delivery scenario —
+nothing today stops the function from creating a second `agent_jobs` row or
+re-running the agent (including a second, billable OpenAI call) for what
+is effectively the same request.
+
+This is a real, currently-unaddressed gap, not a hypothetical: Inngest's
+delivery model is at-least-once, so duplicate event delivery is an expected
+occurrence in production, not an edge case. A fix needs either an
+idempotency key set on the Inngest event itself (many Inngest SDKs support
+an `id`/dedupe key at the trigger level) or a uniqueness check (e.g. against
+the originating `job_id` or HTTP idempotency key) before
+`gather-data`/`run-agent` create or mutate an `agent_jobs` row. This is
+intentionally left undone here — documented as a known gap for a future
+fix, not silently patched.
 
 ## Where this is tested
 

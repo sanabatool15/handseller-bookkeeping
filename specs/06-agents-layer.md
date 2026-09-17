@@ -61,80 +61,11 @@ never results in "sorry, no advice today," only in a simpler,
 non-AI-generated version of the same advice. This is exercised directly in
 `tests/unit/test_fallback_engine.py`.
 
-## The `agents` package-name collision — FIXED by renaming to `ai_agents/`
+## The `agents` package-name collision — fixed
 
-This was a real, previously reproduced problem (not theoretical), and it
-is now fixed rather than merely worked around.
-
-**The problem:** the `openai-agents` PyPI package installs as a top-level
-module named `agents`. This repository's own AI-code directory was
-*also* a top-level package named `agents` (as the original spec's
-directory-name requirement demanded), and Python resolves `import agents`
-to whichever `agents` package it finds first on `sys.path`. Critically,
-when the import happened from *inside* this repo's own
-`agents/api/financial_advisor_agent.py`, Python had already registered
-this local package as the module named `agents` in `sys.modules` before
-that submodule's code even ran (that's how Python imports work: the
-parent package is imported before its submodules). So `import agents`
-from inside this repo's own agent-orchestration code always resolved to
-*itself*, never to the real SDK — **the real SDK was structurally
-unreachable, permanently, regardless of installation or configuration.**
-
-**Old workaround (no longer in place):** the code used to detect this
-defensively — check whether the imported `agents` module had `Agent`/
-`Runner` attributes, and if not, treat it exactly like "SDK unavailable"
-and always raise `AgentUnavailableError`, routing every single request to
-the rule-based fallback. This was a correct, honest way to *survive* the
-collision, but it meant the "live AI advice" feature could never actually
-run in this repo's own process, no matter what `OPENAI_API_KEY` was set to.
-
-**The fix, applied:** the package was renamed from `agents/` to
-**`ai_agents/`**. There is no longer any local package named `agents`
-anywhere in this repository, so `import agents` inside
-`ai_agents/api/financial_advisor_agent.py` now genuinely resolves to the
-real `openai-agents` SDK's top-level `agents` module — verify this
-yourself with `python -c "import agents; print(agents.__file__)"` from the
-repo root; it should print a path inside your virtualenv's
-`site-packages`, not anywhere inside this repo.
-
-`financial_advisor_agent.py` was simplified accordingly — it no longer
-needs the defensive attribute-sniffing, since there's nothing left to be
-shadowed by:
-
-```python
-try:
-    from agents import Agent as _SdkAgent
-    from agents import Runner as _SdkRunner
-    _sdk_available = True
-except ImportError:
-    _sdk_available = False
-```
-
-`run_financial_advisor` still raises `AgentUnavailableError` — but now
-only for *genuine* reasons an external API can fail: the package isn't
-installed (`ImportError`), or the live `Runner.run(...)` call itself
-raises (network failure, invalid/missing `OPENAI_API_KEY`, rate limiting,
-etc. — caught and re-raised as `AgentUnavailableError` so the caller's
-fallback behavior is unchanged). The Inngest job step still catches this
-exactly the same way and falls back to
-`ai_agents/rules/fallback_engine.py` — **the resilience guarantee (a user
-always gets advice) is unchanged; what changed is that the live SDK path
-can now actually execute when it's genuinely configured**, instead of
-being permanently dead code.
-
-**Why renaming was the right fix (and not, say, a `sys.path` hack):** a
-`sys.path` manipulation or import-order trick to "unshadow" the SDK from
-inside the package that shadows it is fragile — it depends on import
-timing that can silently break under any refactor, and it hides a real
-architectural fact (two packages want the same name) behind "clever" code
-a future maintainer has to reverse-engineer. Renaming this repo's own
-package removes the ambiguity permanently and makes the fix visible in the
-directory listing itself, not buried in an import-order workaround.
-
-**Do not rename this package back to `agents/`** — that reintroduces the
-exact collision and makes the live SDK path unreachable again, silently
-(the code would still "work" by falling back every time, which is exactly
-the kind of quiet regression this note exists to prevent).
+This package was renamed from `agents/` to `ai_agents/` to resolve a name
+collision with the third-party `openai-agents` SDK (which also installs as
+a top-level `agents` module). This is fixed — do not rename it back.
 
 ## Where this is tested
 

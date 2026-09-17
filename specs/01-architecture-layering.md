@@ -34,17 +34,6 @@ routers do, so validation/scoping logic is never duplicated per entry point.
 
 ## Why we did it
 
-This is a direct fix for what went wrong in earlier variants of this same
-project:
-
-- **`variant-1`** put database calls, validation, and route handling in the
-  same function — any change to the schema meant hunting through HTTP
-  handler code to find the SQL.
-- **`variant-2`** introduced the three folders, but a couple of routers
-  still executed Supabase queries directly "just for this one endpoint,"
-  and authorization checks were scattered between routers and services
-  inconsistently.
-
 Concentrating **all** database access in one layer means:
 
 1. **The multi-tenancy rule can be audited in one place.** To verify no
