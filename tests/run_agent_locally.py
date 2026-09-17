@@ -7,7 +7,7 @@ OpenRouter config actually works -- in seconds, without a full
 `docker compose up --build` cycle.
 
 Usage:
-    python scripts/run_agent_locally.py
+    python tests/run_agent_locally.py
 
 Requires only OPENAI_API_KEY / OPENAI_API_BASE_URL / OPENAI_MODEL to be
 set in .env (same file docker compose uses). Nothing else needs to be
