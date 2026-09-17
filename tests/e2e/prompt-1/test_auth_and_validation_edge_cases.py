@@ -12,7 +12,7 @@ from tests.integration.conftest import auth_headers, register_and_login
 
 
 def test_duplicate_email_registration_rejected(client):
-    register_and_login(client, email="dup@example.com")
+    register_and_login(client, email="sbatool6678@gmail.com")
 
     resp = client.post(
         "/auth/register",

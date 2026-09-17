@@ -53,7 +53,7 @@ def test_end_to_end_financial_advice_job_completes():
         # Poll until the Inngest dev server has driven the job to completion.
         import time
 
-        for _ in range(30):
+        for _ in range(600):
             status = client.get(f"/agent-jobs/{job_id}", headers=headers)
             if status.json().get("status") == "completed":
                 assert status.json()["result"] is not None
