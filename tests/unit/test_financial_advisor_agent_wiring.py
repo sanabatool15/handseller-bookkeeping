@@ -31,6 +31,11 @@ from ai_agents.api.financial_advisor_agent import (
 SUMMARY = {"org_id": "org-1", "total_sales": 10.0, "total_expenses": 5.0, "net_profit": 5.0}
 
 
+class _FakeDb:
+    """Minimal stand-in for a Supabase client; these tests mock the SDK
+    layer above it and never touch it directly."""
+
+
 class _FakeStreamResult:
     """Stands in for `RunResultStreaming`: `Runner.run_streamed(...)` returns
     this synchronously, then callers `async for event in .stream_events()`.
@@ -86,7 +91,7 @@ async def test_agent_model_is_never_a_bare_string_when_client_is_configured():
          patch("ai_agents.api.financial_advisor_agent._sdk_handoff", side_effect=lambda a: a), \
          patch("ai_agents.api.financial_advisor_agent._openai_client", new=object()):
         print("  simulating: OPENAI_API_KEY + OPENAI_API_BASE_URL set (e.g. OpenRouter), Runner.run_streamed() mocked to succeed")
-        advice = await run_financial_advisor(SUMMARY)
+        advice = await run_financial_advisor(_FakeDb(), SUMMARY)
 
         assert mock_agent_cls.called, "Agent(...) was never constructed"
         for call in mock_agent_cls.call_args_list:
@@ -120,7 +125,7 @@ async def test_agent_constructor_never_receives_api_key_or_base_url():
     with patch("ai_agents.api.financial_advisor_agent._SdkRunner.run_streamed", return_value=fake_result), \
          patch("ai_agents.api.financial_advisor_agent._SdkAgent", new=mock_agent_cls), \
          patch("ai_agents.api.financial_advisor_agent._sdk_handoff", side_effect=lambda a: a):
-        await run_financial_advisor(SUMMARY)
+        await run_financial_advisor(_FakeDb(), SUMMARY)
 
         for call in mock_agent_cls.call_args_list:
             kwargs = call.kwargs
@@ -146,7 +151,7 @@ async def test_runner_failure_raises_agent_unavailable_with_real_cause():
          patch("ai_agents.api.financial_advisor_agent._sdk_handoff", side_effect=lambda a: a):
         print("  simulating: stream_events() raises ConnectionError('Name or service not known') (DNS failure, as seen in real logs)")
         with pytest.raises(AgentUnavailableError) as exc_info:
-            await run_financial_advisor(SUMMARY)
+            await run_financial_advisor(_FakeDb(), SUMMARY)
 
         message = str(exc_info.value)
         print(f"  AgentUnavailableError message raised: {message!r}")
@@ -165,5 +170,5 @@ async def test_empty_final_output_raises_agent_unavailable():
          patch("ai_agents.api.financial_advisor_agent._SdkAgent", new=mock_agent_cls), \
          patch("ai_agents.api.financial_advisor_agent._sdk_handoff", side_effect=lambda a: a):
         with pytest.raises(AgentUnavailableError):
-            await run_financial_advisor(SUMMARY)
+            await run_financial_advisor(_FakeDb(), SUMMARY)
         print("  PASS: empty output correctly triggers AgentUnavailableError -> caller falls back to rule-based advice")

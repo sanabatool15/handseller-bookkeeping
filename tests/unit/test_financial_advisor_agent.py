@@ -27,7 +27,7 @@ async def test_agent_unavailable_or_succeeds_without_crashing():
     """
     summary = {"org_id": "org-1", "total_sales": 10.0, "total_expenses": 5.0, "net_profit": 5.0}
     try:
-        advice = await run_financial_advisor(summary)
+        advice = await run_financial_advisor(_FakeDb(), summary)
     except AgentUnavailableError:
         # Valid: SDK not installed, no API key, no network, or the live
         # call itself failed — the caller (the Inngest job step) falls

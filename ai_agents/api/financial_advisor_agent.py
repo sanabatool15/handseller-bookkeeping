@@ -1,40 +1,19 @@
 """OpenAI Agents SDK orchestration for the bookkeeping assistant.
 
-FIXED (previously documented limitation): this package used to be named
-`agents/`, which collided with the top-level `agents` module installed by
-the `openai-agents` PyPI package — `import agents` from inside that
-package always resolved to itself, so the real SDK was structurally
-unreachable no matter what was configured. This package is now named
-`ai_agents/` specifically to free up the `agents` import for the real SDK.
-`import agents` here now genuinely resolves to `openai-agents`.
+Package renamed `agents/` -> `ai_agents/` so `import agents` resolves to the
+real `openai-agents` SDK instead of shadowing itself.
 
-Architecture (v2 — planner + handoff, see the design plan this implements):
-three agents instead of one.
+Three agents: `planner_agent` (no tools, just hands off via `handoff()` so
+conversation history carries over) routes to `investigate_agent` (read-only
+summary/breakdown tools + `web_search`) or `record_agent` (record-creation
+tools + `deep_link`). Both specialists return a structured
+`BookkeepingResult`; the whole chain runs as one `Runner.run_streamed()`
+call with an `error_handlers={"max_turns": ...}` fallback to the rule engine.
 
-- `planner_agent` holds no bookkeeping tools at all — its only job is
-  reading the user's message and handing off to whichever specialist fits
-  (`handoff()`, not `Agent.as_tool()`, so the full conversation history,
-  including the planner's own stated reasoning, carries over automatically).
-- `investigate_agent` holds the read-only summary/breakdown tools plus
-  `web_search`, and answers "how's my business doing / why" questions.
-- `record_agent` holds the record-creation tools plus `deep_link`, and
-  answers "I spent/sold X" statements by recording them directly (no
-  approval gate — see the design plan's Section 7).
-
-Both specialists return a structured `BookkeepingResult`. The whole chain —
-planner hop, handoff, specialist's own tool calls — runs as a single
-`Runner.run_streamed()` call starting at `planner_agent`, under one
-`max_turns` budget, with an `error_handlers={"max_turns": ...}` fallback to
-the existing deterministic rule engine.
-
-The SDK can still legitimately be unavailable at runtime for ordinary
-reasons — it isn't installed, there's no network, or `OPENAI_API_KEY`
-isn't configured — and those are handled the same way as before:
-`run_bookkeeping_agent` raises `AgentUnavailableError`, which
+`run_bookkeeping_agent` raises `AgentUnavailableError` for any ordinary
+failure (not installed, no network, no API key, live-call error), which
 `jobs/financial_agent_job.py` catches and falls back to
-`ai_agents/rules/fallback_engine.py`. So a job always produces useful
-advice, whether or not a live OpenAI account is configured in this
-environment.
+`ai_agents/rules/fallback_engine.py`.
 """
 from __future__ import annotations
 
@@ -83,27 +62,12 @@ try:
     from agents.run_error_handlers import RunErrorHandlerResult as _RunErrorHandlerResult
     from openai import AsyncOpenAI as _AsyncOpenAI
 
-    # Agent(...) itself has no api_key/base_url kwargs (verified against the
-    # installed openai-agents package: Agent.__init__ only accepts a `model`
-    # string/Model, not api_key/base_url). A custom endpoint (e.g. OpenRouter)
-    # must be configured via a client passed explicitly instead.
-    #
-    # Also: Runner.run() builds its own MultiProvider internally when Agent's
-    # `model` is a bare string, and MultiProvider parses any "/" in the model
-    # name as "<prefix>/<model>", erroring with UserError("Unknown prefix: ...")
-    # for any prefix it doesn't recognize (verified against the installed
-    # package's MultiProvider._resolve_prefixed_model — only "openai",
-    # "litellm", "any-llm" are built in). OpenRouter model IDs are commonly
-    # namespaced like "inclusionai/<model>", which isn't one of those, so a
-    # bare string silently mis-routes and fails. Passing an explicit
-    # OpenAIChatCompletionsModel(model=..., openai_client=...) instead makes
-    # Agent.model a Model object, bypassing MultiProvider's prefix parsing
-    # entirely and sending the model string to our own client as-is.
-    #
-    # OPEN QUESTION (plan Section 10, item 2): this OpenRouter wiring path
-    # was carried over unchanged from the single-agent version and has not
-    # been re-verified against a real OpenRouter model + 3-agent handoffs +
-    # output_type combination — flagged for a human to confirm.
+    # Agent(...) has no api_key/base_url kwargs, so a custom endpoint (e.g.
+    # OpenRouter) is wired via an explicit OpenAIChatCompletionsModel +
+    # AsyncOpenAI client instead — this also sidesteps MultiProvider's "/"
+    # prefix parsing, which would otherwise mis-route OpenRouter-style model
+    # IDs like "inclusionai/<model>". Not re-verified against a real
+    # OpenRouter model + 3-agent handoffs + output_type combination.
     _openai_client = _AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL) if API_KEY and BASE_URL else None
     if _openai_client is not None:
         _set_default_openai_client(_openai_client, use_for_tracing=False)
@@ -220,12 +184,16 @@ async def run_bookkeeping_agent(
     }
 
 
-async def run_financial_advisor(monthly_summary: dict[str, Any]) -> str:
+async def run_financial_advisor(db: Client, monthly_summary: dict[str, Any]) -> str:
     """Backward-compatible entry point used by the proactive monthly-advice
     job: synthesizes an investigation request from the monthly summary
     (routing it to `investigate_agent` via the planner, same as any other
     "how's my business doing" question) and returns the resulting advice as
     a plain string, same shape the caller expects.
+
+    `db` must be supplied by the caller (the job already holds one from the
+    job context/token-derived org_id) — this module never obtains its own
+    Supabase client, per the routers -> services -> repository layering.
 
     Raises AgentUnavailableError on any failure so the caller falls back to
     `ai_agents/rules/fallback_engine.py`.
@@ -239,16 +207,8 @@ async def run_financial_advisor(monthly_summary: dict[str, Any]) -> str:
         "How is the business doing, and what's the single most important thing to act on?"
     )
 
-    db: Client | None = None
-    try:
-        from app.clients import get_supabase
-
-        db = get_supabase()
-    except Exception:  # noqa: BLE001 - db may be unavailable outside a real run; tools that need it will raise
-        db = None
-
     outcome = await run_bookkeeping_agent(
-        db,  # type: ignore[arg-type]
+        db,
         org_id=org_id,
         user_id="system",
         user_message=user_message,
