@@ -51,7 +51,9 @@ async def main() -> None:
     # module-level client setup in financial_advisor_agent.py sees the
     # same env vars a real docker compose run would.
     from ai_agents.api.financial_advisor_agent import AgentUnavailableError, run_financial_advisor
+    from app.clients import get_supabase
 
+    db = get_supabase()
     sample_summary = {
         "total_sales": 4250.00,
         "total_expenses": 1830.50,
@@ -64,7 +66,7 @@ async def main() -> None:
 
     started = time.monotonic()
     try:
-        advice = await run_financial_advisor(sample_summary)
+        advice = await run_financial_advisor(db, sample_summary)
     except AgentUnavailableError as exc:
         elapsed = time.monotonic() - started
         print(f"RESULT: AgentUnavailableError after {elapsed:.1f}s")
