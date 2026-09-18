@@ -23,6 +23,14 @@ def monthly_summary(db: Client, *, org_id: str, year: int, month: int) -> dict[s
     }
 
 
+def expense_breakdown_by_category(db: Client, *, org_id: str, year: int, month: int) -> dict[str, float]:
+    return expenses_repository.sum_expenses_by_category_for_month(db, org_id=org_id, year=year, month=month)
+
+
+def sales_breakdown_by_category(db: Client, *, org_id: str, year: int, month: int) -> dict[str, float]:
+    return sales_repository.sum_sales_by_category_for_month(db, org_id=org_id, year=year, month=month)
+
+
 def monthly_ledger_csv(db: Client, *, org_id: str, year: int, month: int) -> str:
     """Builds the raw CSV text served by the ledger://{org_id}/monthly.csv MCP resource."""
     sales = sales_repository.list_sales(db, org_id=org_id, limit=1000)

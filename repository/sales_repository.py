@@ -74,3 +74,24 @@ def sum_sales_for_month(db: Client, *, org_id: str, year: int, month: int) -> fl
         .execute()
     )
     return sum(float(r["amount"]) for r in (resp.data or []))
+
+
+def sum_sales_by_category_for_month(db: Client, *, org_id: str, year: int, month: int) -> dict[str, float]:
+    """Returns {category: total_amount} for the given org/month. Scoped by org_id."""
+    start = f"{year:04d}-{month:02d}-01"
+    end_month = month + 1 if month < 12 else 1
+    end_year = year if month < 12 else year + 1
+    end = f"{end_year:04d}-{end_month:02d}-01"
+    resp = (
+        db.table("sales")
+        .select("category,amount")
+        .eq("org_id", org_id)
+        .gte("sale_date", start)
+        .lt("sale_date", end)
+        .execute()
+    )
+    totals: dict[str, float] = {}
+    for row in resp.data or []:
+        category = row.get("category") or "uncategorized"
+        totals[category] = totals.get(category, 0.0) + float(row["amount"])
+    return totals
