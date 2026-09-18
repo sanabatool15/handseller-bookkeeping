@@ -12,7 +12,12 @@ dependencies = [
     "redis>=5.0.0",
     "inngest>=0.3.0",
     "fastmcp>=0.2.0",
-    "openai-agents>=0.0.3",
+    # >=0.22.0: the planner+handoff/BookkeepingResult architecture in
+    # ai_agents/api/financial_advisor_agent.py depends on `Runner.run_streamed`
+    # accepting `error_handlers` and `RunErrorHandlers["max_turns"]`/
+    # `RunErrorHandlerResult`, verified against the installed 0.22.3 wheel.
+    # Older versions may not have this shape — re-verify before loosening.
+    "openai-agents>=0.22.0",
     "pyjwt>=2.9.0",
     "python-dotenv>=1.0.1",
     "httpx>=0.27.0",

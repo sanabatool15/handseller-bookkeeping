@@ -56,6 +56,10 @@ async def _step_run_agent(job_id: str, org_id: str, summary: dict[str, Any]) -> 
     db = get_supabase()
     fallback_reason: str | None = None
     try:
+        # run_financial_advisor drives the planner -> handoff -> specialist
+        # chain (Runner.run_streamed, starting at planner_agent) internally
+        # — see ai_agents/api/financial_advisor_agent.py. This job never
+        # touches the OpenAI Agents SDK directly, only through that module.
         advice = await run_financial_advisor(summary)
         source = "openai_agent"
     except Exception as exc:  # noqa: BLE001 - deliberate fallback on ANY agent/API failure

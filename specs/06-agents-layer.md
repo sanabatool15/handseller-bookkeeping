@@ -6,14 +6,43 @@ Split the AI-facing code into four purpose-specific subfolders, exactly as
 the spec for this step demanded:
 
 - **`ai_agents/prompts/*.md`** — every system/agent prompt as a Markdown
-  file (`financial_advisor_system.md`, `financial_audit.md`), loaded at
+  file (`financial_advisor_system.md` — legacy, kept for reference;
+  `planner_agent.md`, `investigate_agent.md`, `record_agent.md` — the
+  current three-agent architecture; `financial_audit.md`), loaded at
   runtime by `ai_agents/prompt_loader.py`. **No prompt text is ever a
   Python string literal in this codebase.**
 - **`ai_agents/api/financial_advisor_agent.py`** — orchestration against
-  the OpenAI Agents SDK: builds an `Agent` with instructions loaded from
-  `ai_agents/prompts/financial_advisor_system.md`, runs it via
-  `Runner.run(...)` against a JSON-serialized monthly summary, and returns
-  the agent's final text output.
+  the OpenAI Agents SDK, now a **planner + handoff, three-agent
+  architecture** instead of one agent:
+  - `planner_agent` holds zero tools and only routes, via `handoff()`, to
+    `investigate_agent` (read-only summary/breakdown/`web_search` tools) or
+    `record_agent` (record-creation tools + `deep_link`). A handoff passes
+    the full conversation history by default, so the planner's stated
+    reasoning carries over to whichever specialist it hands off to.
+  - Both specialists declare `output_type=BookkeepingResult` (a pydantic
+    model: `mode`, `summary`, `root_cause`, `recommendation`,
+    `used_web_search`, `record_reference`). The planner deliberately does
+    **not** set `output_type` — its only action is a handoff, never a
+    final answer (see `ai_agents/api/financial_advisor_agent.py`'s module
+    docstring for why `output_type` + `handoffs` on the same agent was left
+    unconfirmed against the SDK docs and sidestepped rather than guessed
+    at).
+  - `run_bookkeeping_agent(db, org_id, user_id, user_message, ...)` drives
+    the whole chain with **one** `Runner.run_streamed(planner_agent, ...)`
+    call, `max_turns=10`, and `error_handlers={"max_turns": on_max_turns}`
+    falling back to `rule_based_financial_advice`. The event stream
+    (`stream_events()`) surfaces `agent_updated_stream_event` on every
+    handoff and `run_item_stream_event` for each tool call.
+  - `run_financial_advisor(monthly_summary)` is the backward-compatible
+    entry point the proactive monthly-advice job still calls: it
+    synthesizes an investigation-style question from the summary (so it
+    always routes to `investigate_agent`) and returns the specialist's
+    `summary`/`recommendation` as a plain string, same shape as before.
+  - Tool functions themselves are unchanged business logic — see
+    `ai_agents/tools/bookkeeping_tools.py`, which wraps the existing
+    `services/financial_report_service.py`, `services/expenses_service.py`
+    and `services/sales_service.py` calls as `@function_tool` closures
+    scoped to one run's `org_id`/`user_id` (never supplied by the LLM).
 - **`ai_agents/rules/fallback_engine.py`** — a fully deterministic, offline
   rule engine (`rule_based_financial_advice`) that produces useful advice
   from the same monthly-summary input **without any network call or LLM**.

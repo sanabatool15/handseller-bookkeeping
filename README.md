@@ -93,11 +93,29 @@ the `job_id` immediately. `GET /agent-jobs/{job_id}` polls status.
 `ctx.step.run(...)`:
 
 1. **gather-data** — pull this month's sales/expense totals from Postgres.
-2. **run-agent** — run the OpenAI Agents SDK financial advisor; on ANY
-   failure (not installed, no network, no API key, the live call itself
-   erroring) it falls back to `ai_agents/rules/fallback_engine.py`, a fully
-   deterministic, offline rule engine, so the job always produces useful
-   advice.
+2. **run-agent** — runs the OpenAI Agents SDK bookkeeping assistant, a
+   **planner + handoff, three-agent architecture** (see
+   `ai_agents/api/financial_advisor_agent.py`):
+   - `planner_agent` holds no tools; it only reads the request and hands
+     off (`handoff()`) to whichever specialist fits.
+   - `investigate_agent` holds the read-only tools
+     (`get_monthly_summary`, `get_expense_breakdown_by_category`,
+     `get_sales_breakdown_by_category`, `web_search`) and answers
+     "how's my business doing / why" questions — this is what the
+     proactive monthly-advice job routes to.
+   - `record_agent` holds the record-creation tools
+     (`create_expense_record`, `create_sales_record`, `deep_link`) and
+     records a described transaction directly (no approval gate).
+
+   The whole chain — planner hop, handoff, specialist's own tool calls —
+   runs as one `Runner.run_streamed(planner_agent, ...)` call with
+   `max_turns=10` and an `error_handlers={"max_turns": ...}` fallback.
+   Both specialists return a structured `BookkeepingResult` pydantic model
+   (`mode`, `summary`, `root_cause`, `recommendation`, `used_web_search`,
+   `record_reference`). On ANY failure (not installed, no network, no API
+   key, the live call itself erroring, or `max_turns` exceeded) it falls
+   back to `ai_agents/rules/fallback_engine.py`, a fully deterministic,
+   offline rule engine, so the job always produces useful advice.
 3. **finalize** — mark the job `completed` and store the result.
 
 Each step writes to `agent_logs` (`step_name`, `action_summary`,
