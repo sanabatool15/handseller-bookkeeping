@@ -109,3 +109,21 @@ against the newly installed version before trusting existing code (or this
 spec's description of it) to still be accurate. See
 `05-background-jobs-inngest.md` and `07-mcp-server.md` for the exact
 assumptions recorded.
+
+## 9. `record_agent` is only reachable via the planner's `handoff()`, and no production caller currently routes there
+
+This is not a missing-endpoint gap — `record_agent` doesn't need its own
+direct endpoint any more than `investigate_agent` does; both are reached
+the same way, through the planner's `handoff()` in
+`ai_agents/api/financial_advisor_agent.py`. The real, narrower gap is that
+the only production caller of the agent chain, `run_financial_advisor()`
+(called from `jobs/financial_agent_job.py:63`), always synthesizes a fixed
+investigation-style question before invoking `run_bookkeeping_agent()` —
+so in production the planner is never given an input that could
+plausibly route to `record_agent`. `record_agent` and its mutating tools
+(`create_expense_record`, `create_sales_record`, `deep_link`) are fully
+implemented and prompted, and are exercised by
+`tests/unit/test_financial_advisor_agent.py` and
+`tests/e2e/prompt-4/`, `tests/e2e/prompt-5/` — but no live caller currently
+passes a free-form `user_message` that would let the planner exercise that
+handoff branch outside of tests.

@@ -20,10 +20,12 @@ request. Instead:
    function with **three steps**, each wrapped in `step.run(step_id, fn)`:
    - **`gather-data`**: pulls this month's sales/expense totals via
      `services.financial_report_service.monthly_summary`.
-   - **`run-agent`**: calls `agents.api.financial_advisor_agent.run_financial_advisor`;
-     on **any** exception (network failure, missing API key, the `agents`
-     package-shadowing issue — see `06-agents-layer.md`) it falls back to
-     `agents.rules.fallback_engine.rule_based_financial_advice` instead of
+   - **`run-agent`**: calls `ai_agents.api.financial_advisor_agent.run_financial_advisor`;
+     on **any** exception (network failure, missing API key, the OpenAI SDK
+     simply not being installed — see `06-agents-layer.md` for the
+     now-fixed `agents` package-shadowing issue that used to make it
+     unreachable) it falls back to
+     `ai_agents.rules.fallback_engine.rule_based_financial_advice` instead of
      failing the job.
    - **`finalize`**: marks the job `completed` and stores the result.
 
@@ -77,9 +79,10 @@ directly, and shouldn't need to.
 would trigger an Inngest retry, and eventually `on_failure_handler`,
 marking the whole job `failed`). This is deliberate: a bookkeeping user
 asking for financial advice should get *some* useful, if simpler, answer
-even if the OpenAI API is down, misconfigured, or the SDK is unreachable
-due to the package-shadowing issue described in `06-agents-layer.md` — not
-a failed job with no output at all. The `source` field
+even if the OpenAI API is down, misconfigured, or (historically, before the
+`agents` → `ai_agents` rename fixed the package-shadowing collision
+described in `06-agents-layer.md`) the SDK was structurally unreachable —
+not a failed job with no output at all. The `source` field
 (`"openai_agent"` vs `"rule_based_fallback"`) in the stored result makes
 which path was taken transparent, rather than silently pretending the
 rule-based answer came from the LLM.
