@@ -32,7 +32,7 @@ def _seed_history(db, *, org_id: str, user_id: str, cleanup, story):
     sale_row = {
         "id": str(uuid.uuid4()),
         "org_id": org_id,
-        "user_id": user_id,
+        "created_by": user_id,
         "amount": 50.0,
         "category": "retail",
         "description": "seed sale for investigate-agent observation",
@@ -45,7 +45,7 @@ def _seed_history(db, *, org_id: str, user_id: str, cleanup, story):
     expense_row = {
         "id": str(uuid.uuid4()),
         "org_id": org_id,
-        "user_id": user_id,
+        "created_by": user_id,
         "amount": 300.0,
         "category": "packaging",
         "description": "seed expense for investigate-agent observation",

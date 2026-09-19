@@ -17,10 +17,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+
 import uuid
+import time
 
-import pytest
 
+import pytest 
+
+# Clear the log file at the start of a test run
+log_path = os.path.join(os.path.dirname(__file__), "test_run.log")
+if os.path.exists(log_path):
+    os.remove(log_path)
 os.environ.setdefault("APP_ENV", "test")
 
 RUN_E2E = os.environ.get("RUN_E2E") == "1"
@@ -35,21 +42,33 @@ pytestmark = pytest.mark.skipif(
 def unique_email(tag: str) -> str:
     return f"e2e-{tag}-{uuid.uuid4().hex[:10]}@example.com"
 
-
 class Story:
-    """Narrates a test's steps to stdout only (run with `pytest -s` to see
-    them). No log file is written to disk -- this directory is meant to
-    stay clean of generated artifacts."""
+    """Narrates a test's steps to stdout and a persistent log file."""
 
     def __init__(self, test_name: str):
         self._test_name = test_name
+        # Defines the log file path relative to conftest.py
+        self._log_file = os.path.join(os.path.dirname(__file__), "test_run.log")
         self.say(f"--- starting {test_name} ---")
 
     def say(self, message: str) -> None:
-        print(f"[{self._test_name}] {message}")
+        formatted_message = f"[{self._test_name}] {message}"
+        
+        # 1. Print to the terminal
+        print(formatted_message)
+        
+        # 2. Append to the log file
+        with open(self._log_file, "a", encoding="utf-8") as f:
+            f.write(formatted_message + "\n")
 
     def record(self, label: str, record: dict) -> None:
         self.say(f"RECORD {label}: {record}")
+@pytest.fixture(autouse=True)
+def rate_limit_delay(story):
+    """Wait after each test to prevent Gemini 429 Rate Limit errors."""
+    yield
+    story.say("Waiting 5 seconds to respect Gemini rate limits...")
+    time.sleep(20)
 
 
 @pytest.fixture
