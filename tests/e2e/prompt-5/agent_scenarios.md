@@ -1,7 +1,7 @@
 # Prompt-5 Agent Scenarios — Observational E2E
 
-Grounded in the real implementation (no `specs/` file covers the agent
-prompts/tools directly, so this is based on code, same as prompt-4):
+Grounded in `specs/06-agents-layer.md` (the planner/investigate/record
+three-agent architecture) plus the real implementation it describes:
 
 - `ai_agents/prompts/planner_agent.md` — planner routing rules
 - `ai_agents/prompts/record_agent.md` — record specialist rules
