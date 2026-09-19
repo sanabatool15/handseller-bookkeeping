@@ -1,27 +1,23 @@
 """Shared fixtures for the prompt-5 OBSERVATIONAL agent e2e suite.
 
-This suite is deliberately non-assertive about agent behavior/routing: its
-job is to drive the real three-agent chain (planner -> record/investigate)
-against real Supabase/Redis via `Runner.run_streamed()` and print the full
-captured event stream so a human can review it (`pytest -s`). No test here
-should assert on which agent/tool got chosen or on output content -- only
-that the run completed without raising.
+This directory is deliberately different from `tests/e2e/prompt-4/`: those
+tests assert on specific routing/tool-call outcomes. These tests exist only
+to drive the real three-agent chain (`ai_agents.api.financial_advisor_agent`)
+against real infrastructure, capture the full `Runner.run_streamed()` event
+stream, and print/log it for a human to read -- no rigid assertions about
+which agent or tool the model chose.
 
-Follows the same real-infra convention as tests/e2e/prompt-3/conftest.py and
-tests/e2e/prompt-4/conftest.py: re-point app.clients.get_supabase()/
-get_redis() at real clients built from .env, shadowing the repo-root autouse
-fake-wiring fixture. Gated behind RUN_E2E=1 since it needs a real
-OPENAI_API_KEY plus real Supabase/Redis -- without RUN_E2E=1 the whole
-directory is skipped, not faked.
+Requires `RUN_E2E=1` plus real Supabase/Redis/OPENAI_API_KEY, same
+convention as `tests/e2e/test_full_inngest_workflow.py` and
+`tests/e2e/prompt-4/conftest.py`. Without RUN_E2E=1 the whole directory is
+skipped, never faked.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import os
 import uuid
-from pathlib import Path
 
 import pytest
 
@@ -31,30 +27,9 @@ RUN_E2E = os.environ.get("RUN_E2E") == "1"
 
 pytestmark = pytest.mark.skipif(
     not RUN_E2E,
-    reason="Requires RUN_E2E=1 plus real Supabase/Redis/OPENAI_API_KEY to drive Runner.run_streamed() live "
-    "for observation. Set RUN_E2E=1 (and fill in .env) to run this suite for real.",
+    reason="Requires RUN_E2E=1 plus real Supabase/Redis/OPENAI_API_KEY to drive Runner.run_streamed() live. "
+    "Set RUN_E2E=1 (and fill in .env) to run this suite for real.",
 )
-
-LOG_PATH = Path(__file__).parent / "test_run.log"
-
-_run_logger = logging.getLogger("prompt5.e2e")
-_run_logger.setLevel(logging.INFO)
-
-
-def pytest_configure(config):  # noqa: D401 -- pytest hook, not a test
-    for h in list(_run_logger.handlers):
-        _run_logger.removeHandler(h)
-        h.close()
-
-    handler = logging.FileHandler(LOG_PATH, mode="w", encoding="utf-8")
-    handler.setFormatter(logging.Formatter("%(message)s"))
-    _run_logger.addHandler(handler)
-    _run_logger.propagate = False
-
-    _run_logger.info("=" * 88)
-    _run_logger.info("prompt-5 OBSERVATIONAL e2e run log -- tests/e2e/prompt-5/test_run.log")
-    _run_logger.info("No pass/fail judgment on agent behavior lives here -- review manually.")
-    _run_logger.info("=" * 88)
 
 
 def unique_email(tag: str) -> str:
@@ -62,17 +37,16 @@ def unique_email(tag: str) -> str:
 
 
 class Story:
-    """Narrates a test's steps to both stdout (for `pytest -s`) and the
-    shared per-run log file."""
+    """Narrates a test's steps to stdout only (run with `pytest -s` to see
+    them). No log file is written to disk -- this directory is meant to
+    stay clean of generated artifacts."""
 
     def __init__(self, test_name: str):
         self._test_name = test_name
         self.say(f"--- starting {test_name} ---")
 
     def say(self, message: str) -> None:
-        line = f"[{self._test_name}] {message}"
-        print(line)
-        _run_logger.info(line)
+        print(f"[{self._test_name}] {message}")
 
     def record(self, label: str, record: dict) -> None:
         self.say(f"RECORD {label}: {record}")
@@ -86,9 +60,9 @@ def story(request):
 
 
 # ---------------------------------------------------------------------------
-# Real-infra client wiring (only actually exercised when RUN_E2E=1; imports
-# are deferred into the fixture body so collection never requires a real
-# .env / network access).
+# Real-infra client wiring (only exercised when RUN_E2E=1; imports are
+# deferred into the fixture body so collection never requires a real .env
+# or network access).
 # ---------------------------------------------------------------------------
 
 
@@ -159,8 +133,8 @@ class Cleanup:
 
 @pytest.fixture
 def cleanup(db, story):
-    """Guaranteed teardown fixture: yield + finally so cleanup runs
-    unconditionally, even on an unexpected exception mid-test."""
+    """Guaranteed teardown of every row a test tracks, regardless of
+    whether the test body raises."""
     c = Cleanup(db, story)
     try:
         yield c
@@ -173,14 +147,15 @@ def cleanup(db, story):
             warnings.warn("prompt-5 e2e cleanup issues: " + "; ".join(errors))
 
 
-def register_org(client, cleanup, story, tag: str):
-    """Direct HTTP registration -- the real integration point for creating
-    an org/user, per the existing e2e convention."""
+def register_org(client, cleanup, story, tag: str) -> tuple[str, str]:
+    """Registers a fresh org+user via the real HTTP API (not direct DB
+    writes -- auth/org creation is app behavior we want to exercise for
+    real) and tracks both rows for cleanup."""
     email = unique_email(tag)
     payload = {
         "email": email,
         "password": "correct-horse-1",
-        "full_name": "E2E Observational Tester",
+        "full_name": "E2E Agent Tester",
         "org_name": f"Org-{tag}",
     }
     story.say(f"Registering user {email!r} for org 'Org-{tag}'")
@@ -189,8 +164,7 @@ def register_org(client, cleanup, story, tag: str):
         json=payload,
         headers={"Idempotency-Key": f"reg-{tag}-{uuid.uuid4().hex[:6]}"},
     )
-    if resp.status_code != 201:
-        raise AssertionError(f"registration failed unexpectedly: {resp.status_code} {resp.text}")
+    assert resp.status_code == 201, f"register failed: {resp.status_code} {resp.text}"
     body = resp.json()
     org_id = body["org"]["id"]
     user_id = body["user"]["id"]
@@ -202,9 +176,10 @@ def register_org(client, cleanup, story, tag: str):
 
 class StreamCapture:
     """Buckets Runner.run_streamed() events into handoffs / tool_calls /
-    outputs and prints every event as it arrives, for human review. Reads
-    attributes defensively so an unrelated or SDK-version-shifted event
-    shape is logged and skipped rather than crashing the observation run.
+    outputs and prints each one as it arrives, so `pytest -s` shows the
+    full live trace. Reads attributes defensively so an unrelated or
+    SDK-version-shifted event shape is logged and skipped rather than
+    crashing the test.
     """
 
     def __init__(self, story: Story):
@@ -235,7 +210,8 @@ class StreamCapture:
                 self._story.say(f"TOOL_CALL {name}({args})")
             elif item_type == "tool_call_output_item":
                 output = getattr(item, "output", None)
-                self._story.say(f"TOOL_CALL_OUTPUT {output!r}")
+                self.outputs.append(f"TOOL_OUTPUT: {output}")
+                self._story.say(f"TOOL_OUTPUT {output}")
             elif item_type == "message_output_item":
                 self.outputs.append(str(item))
                 self._story.say(f"MESSAGE_OUTPUT {item}")
@@ -254,20 +230,19 @@ class StreamCapture:
         return {}
 
     def print_summary(self) -> None:
-        self._story.say("=" * 72)
-        self._story.say("STREAM SUMMARY (for human review -- no pass/fail judgment here)")
-        self._story.say(f"  handoffs:   {self.handoffs}")
-        self._story.say(f"  tool_calls: {self.tool_calls}")
-        self._story.say(f"  outputs:    {self.outputs}")
-        self._story.say("=" * 72)
+        self._story.say("=" * 78)
+        self._story.say("CAPTURED EVENT STREAM SUMMARY (for human review)")
+        self._story.say(f"handoffs:   {self.handoffs}")
+        self._story.say(f"tool_calls: {self.tool_calls}")
+        self._story.say(f"outputs:    {self.outputs}")
+        self._story.say("=" * 78)
 
 
 async def run_planner(db, *, org_id: str, user_id: str, message: str, story: Story):
     """Builds the real three-agent chain via the production wiring
-    (`build_agents`) and drives `Runner.run_streamed()` directly against the
-    planner, capturing and printing every event -- the exact call shape
-    `run_bookkeeping_agent()` uses internally, just with full observation
-    instead of only a log line.
+    (`build_agents`) and drives `Runner.run_streamed()` directly -- the
+    exact call shape `run_bookkeeping_agent()` uses internally, with full
+    event capture for printing instead of only a log line.
     """
     from agents import Runner
 
@@ -279,25 +254,7 @@ async def run_planner(db, *, org_id: str, user_id: str, message: str, story: Sto
     result = Runner.run_streamed(planner_agent, message, max_turns=DEFAULT_MAX_TURNS)
     async for event in result.stream_events():
         capture.record(event)
+
     capture.print_summary()
-
-    story.say(f"final_output: {getattr(result, 'final_output', None)!r}")
-    return result, capture
-
-
-async def run_agent_directly(agent, *, message: str, story: Story):
-    """Drives Runner.run_streamed() against a single specialist agent
-    directly (bypassing the planner), for tests that want to observe one
-    specialist's behavior in isolation."""
-    from agents import Runner
-
-    from ai_agents.api.financial_advisor_agent import DEFAULT_MAX_TURNS
-
-    capture = StreamCapture(story)
-    result = Runner.run_streamed(agent, message, max_turns=DEFAULT_MAX_TURNS)
-    async for event in result.stream_events():
-        capture.record(event)
-    capture.print_summary()
-
     story.say(f"final_output: {getattr(result, 'final_output', None)!r}")
     return result, capture
