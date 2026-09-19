@@ -33,7 +33,7 @@ the spec for this step demanded:
     falling back to `rule_based_financial_advice`. The event stream
     (`stream_events()`) surfaces `agent_updated_stream_event` on every
     handoff and `run_item_stream_event` for each tool call.
-  - `run_financial_advisor(monthly_summary)` is the backward-compatible
+  - `run_financial_advisor(db, monthly_summary)` is the backward-compatible
     entry point the proactive monthly-advice job still calls: it
     synthesizes an investigation-style question from the summary (so it
     always routes to `investigate_agent`) and returns the specialist's
