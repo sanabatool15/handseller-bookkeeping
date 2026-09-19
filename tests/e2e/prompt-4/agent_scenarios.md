@@ -1,8 +1,7 @@
 # Prompt-4 Agent Scenarios — Planner Routing & Handoff E2E
 
-Basis for everything below: there is no `specs/ai_agents.md` in this repo,
-but `specs/06-agents-layer.md` documents this three-agent architecture, and
-this document is cross-checked against the actual implementation:
+Basis for everything below: there is no `specs/ai_agents.md` in this repo, so
+this document is grounded directly in the actual implementation:
 
 - `ai_agents/prompts/planner_agent.md` — planner's routing instructions
 - `ai_agents/prompts/record_agent.md` — record specialist's instructions
