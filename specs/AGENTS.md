@@ -1,8 +1,8 @@
 # Agents Architecture
 
 Quick-reference overview of the AI agent layer. Full rationale and history
-live in [`specs/06-agents-layer.md`](specs/06-agents-layer.md); this file is
-the short version.
+live in [`06-agents-layer.md`](06-agents-layer.md); this file is the short
+version.
 
 ## Three agents, planner + handoff
 
