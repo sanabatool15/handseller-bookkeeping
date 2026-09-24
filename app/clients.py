@@ -39,6 +39,21 @@ def get_redis() -> aioredis.Redis:
     return _redis_client
 
 
+async def get_redis_checked() -> aioredis.Redis:
+    """Like get_redis(), but discards and recreates the client if the
+    existing connection is stale (e.g. reused across a serverless cold
+    start where the underlying TCP socket has been dropped by the peer)."""
+    global _redis_client
+    client = get_redis()
+    try:
+        await client.ping()
+    except Exception:  # noqa: BLE001
+        await client.aclose()
+        _redis_client = None
+        client = get_redis()
+    return client
+
+
 def set_redis(client: aioredis.Redis) -> None:
     """Test/dependency-injection hook (e.g. fakeredis.aioredis)."""
     global _redis_client
