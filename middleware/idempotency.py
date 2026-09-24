@@ -19,7 +19,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from app.clients import get_redis
+from app.clients import get_redis_checked
 from app.config import get_settings
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH"}
@@ -54,7 +54,7 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
         cache_key = _cache_key(org_scope, idem_key)
         lock_key = _lock_key(org_scope, idem_key)
 
-        redis = get_redis()
+        redis = await get_redis_checked()
         settings = get_settings()
 
         cached = await redis.get(cache_key)
