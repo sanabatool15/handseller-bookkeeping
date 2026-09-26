@@ -23,6 +23,13 @@ export default function AdvisorPage() {
   const pollers = useRef<Record<string, ReturnType<typeof setInterval>>>({});
 
   function pollJob(turnId: string, jobId: string) {
+    // Clear any previous poller for this turn before starting a new one, so
+    // a re-invocation (e.g. React Strict Mode / Fast Refresh in dev) can
+    // never leave two intervals racing for the same turnId.
+    if (pollers.current[turnId]) {
+      clearInterval(pollers.current[turnId]);
+    }
+
     const interval = setInterval(async () => {
       try {
         const job = await api.get<AgentJob>(`/agent-jobs/${jobId}`);
@@ -30,11 +37,16 @@ export default function AdvisorPage() {
           prev.map((t) => (t.id === turnId ? { ...t, job } : t))
         );
         if (job.status === "completed" || job.status === "failed") {
-          clearInterval(pollers.current[turnId]);
+          // Clear the interval this callback actually belongs to, not
+          // whatever the ref currently points at -- a second pollJob call
+          // for the same turnId would otherwise overwrite the ref and this
+          // stop-condition would clear the *new* interval instead of itself,
+          // leaving the original one polling forever.
+          clearInterval(interval);
           delete pollers.current[turnId];
         }
       } catch {
-        clearInterval(pollers.current[turnId]);
+        clearInterval(interval);
         delete pollers.current[turnId];
       }
     }, 1500);
