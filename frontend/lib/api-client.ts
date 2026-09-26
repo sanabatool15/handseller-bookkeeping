@@ -60,6 +60,16 @@ async function request<T>(
       (body && typeof body === "object" && "detail" in body
         ? String((body as { detail: unknown }).detail)
         : null) ?? res.statusText;
+
+    if (res.status === 401 && auth && typeof window !== "undefined") {
+      localStorage.removeItem("access_token");
+      localStorage.removeItem("user");
+      localStorage.removeItem("org");
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+
     throw new ApiError(res.status, message || "Request failed");
   }
 
