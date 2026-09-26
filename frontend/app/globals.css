@@ -1,0 +1,63 @@
+@import "tailwindcss";
+
+:root {
+  /* 60% — dominant: near-white base */
+  --base: #FAFBF4;
+  --base-2: #F1F3E4;
+  --surface: #FFFFFF;
+
+  /* 30% — secondary: dark olive */
+  --olive: #2F3D21;
+  --olive-2: #3E4E2C;
+  --olive-soft: #5C6B45;
+
+  /* 10% — accent: khaki / cream yellow */
+  --accent: #E7E9A0;
+  --accent-2: #D8DB7C;
+
+  --foreground: #22281A;
+  --muted-foreground: #6B7460;
+  --border: #E3E6D4;
+
+  --success: #4C7A3B;
+  --danger: #A8442E;
+
+  --radius: 0.9rem;
+}
+
+@theme inline {
+  --color-base: var(--base);
+  --color-base-2: var(--base-2);
+  --color-surface: var(--surface);
+
+  --color-olive: var(--olive);
+  --color-olive-2: var(--olive-2);
+  --color-olive-soft: var(--olive-soft);
+
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+
+  --color-success: var(--success);
+  --color-danger: var(--danger);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 0.25rem);
+  --radius-sm: calc(var(--radius) - 0.4rem);
+}
+
+body {
+  background: var(--base);
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+* {
+  border-color: var(--border);
+}
