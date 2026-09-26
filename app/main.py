@@ -42,6 +42,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Handseller Bookkeeping Backend", version="0.1.0", lifespan=lifespan)
 
+# Order matters: Starlette runs middleware added last FIRST. We want Auth to
+# run before Idempotency (idempotency cache keys are scoped per-org, which
+# requires request.state.user to already be populated), so add Idempotency
+# first and Auth second. CORSMiddleware must be added LAST (outermost) so it
+# can intercept and answer an OPTIONS preflight request before AuthMiddleware
+# ever sees it -- otherwise every preflight to an authenticated route gets
+# rejected with 401 before CORS headers are attached, which browsers report
+# as a CORS failure even though the real cause is auth running too early.
+app.add_middleware(IdempotencyMiddleware)
+app.add_middleware(AuthMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,12 +59,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-# Order matters: Starlette runs middleware added last FIRST. We want Auth to
-# run before Idempotency (idempotency cache keys are scoped per-org, which
-# requires request.state.user to already be populated), so add Idempotency
-# first and Auth last.
-app.add_middleware(IdempotencyMiddleware)
-app.add_middleware(AuthMiddleware)
 
 
 @app.exception_handler(StarletteHTTPException)
