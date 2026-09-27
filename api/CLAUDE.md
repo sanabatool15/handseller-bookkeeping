@@ -75,46 +75,11 @@ Do not do this even under time pressure or when asked to "just make it work":
 
 ## Two package-name collisions — FIXED by renaming, read before undoing that
 
-These were real, previously-reproduced bugs, not theoretical — and they are
-now **fixed**, not worked around. Both fixes were the same shape: this
-repo's own package had the same name as a required third-party SDK, so
-Python's own package always shadowed the SDK. Renaming our package (not
-the SDK) fixed it permanently.
-
-- **`mcp` PyPI package (a dependency of `fastmcp`) vs. this repo's own
-  directory.** Used to be `mcp/`, which — if given an `__init__.py` and
-  imported as `mcp` before the real SDK — broke `import fastmcp` entirely
-  (`ModuleNotFoundError: No module named 'mcp.server'`, verified). **Fixed:
-  the directory is now `mcp_gateway/`.** It has a normal `__init__.py` and
-  is imported normally (`from mcp_gateway.server import mcp`, `python
-  mcp_gateway/server.py`). `mcp_gateway/server.py`'s own
-  `from mcp.types import ...` and `from fastmcp import ...` now correctly
-  resolve to the real SDK. **Do not rename this directory back to `mcp/`
-  or give any directory literally named `mcp/` an `__init__.py`** in this
-  repo — that reintroduces the exact collision.
-
-- **`agents` PyPI package (`openai-agents`) vs. this repo's own
-  directory.** Used to be `agents/`, which meant `import agents` from
-  *inside* that same package always resolved to itself (Python resolves a
-  package's own name before importing its submodules) — the real SDK was
-  **structurally unreachable**, permanently, regardless of installation or
-  API key configuration. **Fixed: the directory is now `ai_agents/`.**
-  `import agents` inside `ai_agents/api/financial_advisor_agent.py` now
-  genuinely resolves to the real `openai-agents` SDK.
-  `run_financial_advisor` still raises `AgentUnavailableError` (caught by
-  the Inngest job step, which falls back to
-  `ai_agents/rules/fallback_engine.py`) — but now only for *ordinary*
-  reasons an external API can fail: not installed, no network, no
-  `OPENAI_API_KEY`, or the live call itself erroring. **Do not rename this
-  directory back to `agents/`** — that reintroduces the exact collision and
-  makes the SDK unreachable again.
-
-If you ever need to rename either package again (or add a new package that
-might collide with a third-party import), verify with
-`python -c "import agents; print(agents.__file__)"` /
-`python -c "import mcp; print(mcp.__file__)"` that the import resolves to
-the third-party package's site-packages path, not somewhere inside this
-repo, before trusting anything downstream of that import.
+`mcp/` and `agents/` used to shadow the third-party `mcp`/`openai-agents`
+SDKs of the same name, breaking imports (one fully, one silently). Fixed by
+renaming our packages to `mcp_gateway/` and `ai_agents/` — **do not rename
+either back**, that reintroduces the collision. Full story, verification
+commands, and why: `specs/11-package-name-collisions.md`.
 
 ## Before you touch specific things
 
@@ -159,70 +124,17 @@ repo, before trusting anything downstream of that import.
 
 ## Deployment layout (Vercel)
 
-This directory (`api/`) is the entire backend, deployed as a single Vercel
-Python Serverless Function. Everything below assumes your shell's cwd is
-`api/`, not the repo root — the repo root is the Next.js frontend, and
-`api/` is a self-contained Python project inside it.
-
-`api/index.py` is the only top-level `.py` file directly in `api/` — Vercel
-treats any such file as a function entrypoint, so it must stay the single
-one. It imports the real app from `core/fastapi_app.py` and strips the `/api`
-prefix off the incoming path before dispatching to it; the root
-`vercel.json` rewrites every `/api/*` request to this function. Do not add
-another top-level `.py` file in `api/` unless you intend it to become a
-second, separate serverless function.
-
-**Only `api/index.py` may define a top-level `app`/`application`/`handler`
-binding anywhere under `api/`.** Vercel's Python runtime scans every `.py`
-file under `api/` for one of those names and turns each match into its own
-separate serverless function — this is NOT limited to specially-named
-top-level files or to `app/`/`src/` subfolders specifically; renaming the
-backend package folder from `app/` to `core/` alone did not stop it. The
-real FastAPI app used to live at `api/app/main.py`, then `api/core/main.py`
-— both times Vercel treated that file as a *second, independent* entrypoint
-alongside `api/index.py` (both define a top-level `app`), built two
-competing functions (visible in the build log as repeated
-dependency-install cycles), and the resulting routing ambiguity broke the
-deployed site's `/` route entirely, even though the Next.js build itself
-succeeded. The fix was renaming the FILE to `api/core/fastapi_app.py` — a
-name outside Vercel's reserved entrypoint list
-(app.py/index.py/server.py/main.py/wsgi.py/asgi.py). **Never name the real
-app's module `main.py` (or any of that list) anywhere under `api/`, and
-never give any other file under `api/` a top-level `app`/`application`/
-`handler` binding** — that reintroduces the exact collision (see Vercel's
-own docs: https://vercel.com/docs/functions/runtimes/python and
-https://vercel.com/docs/functions/runtimes/python/api-directory — though
-note the observed behavior here is broader than what those pages state
-explicitly).
-
-**`api/index.py` inserts its own directory onto `sys.path` before importing
-`core.fastapi_app`.** Vercel's Python runtime imports `api/index.py` via
-`importlib` directly (not by running it as a script), so Python does NOT
-auto-add the file's own directory to `sys.path` the way it would for a
-normally-executed script — the sibling `core/` package was unimportable as
-a bare `core` without this (`ModuleNotFoundError: No module named 'core'`,
-confirmed against a real deployment log). Do not remove that
-`sys.path.insert(0, ...)` line, and if you ever change how the entrypoint
-resolves the real app, re-verify with an actual Vercel deployment, not just
-a local `uvicorn`/`pytest` run — this class of bug does not reproduce
-locally since local runs execute `index.py` in a context where the cwd
-already resolves `core`.
-
-`api/requirements.txt` and `api/pyproject.toml`'s `[project.dependencies]`
-list the same dependencies in two formats — Vercel's Python builder reads
-either `pyproject.toml`, `requirements.txt`, or a `Pipfile` (it actually
-prefers `pyproject.toml` when present, which is what originally exposed the
-package-collision bug below). Keep both in sync when either changes; local
-Docker/dev tooling uses `requirements.txt` directly.
-
-**Do not add a `[build-system]`/`[tool.setuptools] packages = [...]`
-section back to `pyproject.toml`.** It used to declare all 8 backend
-subpackages, and Vercel's `uv`-based builder read that as 8 separate
-installable workspace members, installing dependencies once per package
-(visible in the build log as repeated "Installing required dependencies"
-cycles) instead of once for the whole app. This project is never `pip
-install`ed as a distributable package — pytest resolves imports via `cwd`,
-no editable install needed.
+`api/` deploys as a single Vercel Python Serverless Function via
+`api/index.py` (the only top-level `.py` file allowed directly in `api/`).
+Key rules: only `index.py` may define a top-level `app`/`application`/
+`handler` name anywhere under `api/`; never name the real FastAPI module
+`main.py` (it lives in `core/fastapi_app.py`); never re-add
+`[build-system]`/`[tool.setuptools] packages = [...]` to `pyproject.toml`.
+Each rule exists because breaking it previously broke a real deployment —
+full history, exact tracebacks, and the Vercel-dashboard "Framework Preset"
+gotcha are in `specs/12-vercel-deployment.md`. Read that file before
+touching `api/index.py`, `vercel.json`, or anything about how this backend
+is entrypointed.
 
 ## Running things
 
