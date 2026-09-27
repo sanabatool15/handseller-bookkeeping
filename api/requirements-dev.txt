@@ -1,0 +1,7 @@
+# Dev/test-only extras (not needed by the deployed Vercel function --
+# see requirements.txt for that). Install alongside requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest>=8.3.0
+pytest-mock>=3.14.0
+pytest-asyncio>=0.24.0
+fakeredis>=2.24.0

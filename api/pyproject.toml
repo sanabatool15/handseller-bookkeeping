@@ -37,9 +37,14 @@ dev = [
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools]
-packages = ["app", "routers", "services", "repository", "middleware", "jobs", "mcp_gateway", "ai_agents"]
+# Deliberately no [build-system]/[tool.setuptools] here: this project is
+# never `pip install`ed as a distributable package (pytest resolves
+# `from app...`/`from routers...` etc. via cwd, no editable install
+# needed -- verified). A [tool.setuptools] `packages = [...]` list used to
+# be here; it broke the Vercel deployment (its uv-based Python builder
+# read this pyproject.toml, saw 8 declared packages, and installed
+# dependencies once per package as if they were separate workspace
+# members -- 6+ redundant installs and broken routing on the deployed
+# site). Do not re-add a build-system/packages declaration here; if a
+# real editable install is ever needed, use a separate pyproject.toml
+# that Vercel's builder never sees.
