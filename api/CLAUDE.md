@@ -195,6 +195,19 @@ https://vercel.com/docs/functions/runtimes/python/api-directory — though
 note the observed behavior here is broader than what those pages state
 explicitly).
 
+**`api/index.py` inserts its own directory onto `sys.path` before importing
+`core.fastapi_app`.** Vercel's Python runtime imports `api/index.py` via
+`importlib` directly (not by running it as a script), so Python does NOT
+auto-add the file's own directory to `sys.path` the way it would for a
+normally-executed script — the sibling `core/` package was unimportable as
+a bare `core` without this (`ModuleNotFoundError: No module named 'core'`,
+confirmed against a real deployment log). Do not remove that
+`sys.path.insert(0, ...)` line, and if you ever change how the entrypoint
+resolves the real app, re-verify with an actual Vercel deployment, not just
+a local `uvicorn`/`pytest` run — this class of bug does not reproduce
+locally since local runs execute `index.py` in a context where the cwd
+already resolves `core`.
+
 `api/requirements.txt` and `api/pyproject.toml`'s `[project.dependencies]`
 list the same dependencies in two formats — Vercel's Python builder reads
 either `pyproject.toml`, `requirements.txt`, or a `Pipfile` (it actually

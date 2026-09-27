@@ -37,6 +37,15 @@ FastAPI app, name the FILE something outside that reserved list.
 """
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+# Vercel's Python runtime imports this file directly via importlib without
+# adding its own directory to sys.path, so the sibling `core` package
+# (api/core/) is NOT importable as a bare "core" without this -- verified via
+# the deployed traceback: "ModuleNotFoundError: No module named 'core'".
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from core.fastapi_app import app as _app
 
 API_PREFIX = "/api"
