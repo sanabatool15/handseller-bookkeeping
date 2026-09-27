@@ -15,13 +15,21 @@ from jobs.financial_agent_job import EVENT_NAME
 from repository import agent_jobs_repository
 
 
-async def trigger_financial_advice_job(db: Client, *, org_id: str, user_id: str) -> dict[str, Any]:
-    job = agent_jobs_repository.create_job(db, job_name="financial_advisor", org_id=org_id, requested_by=user_id)
+async def trigger_financial_advice_job(
+    db: Client, *, org_id: str, user_id: str, question: str | None = None
+) -> dict[str, Any]:
+    job = agent_jobs_repository.create_job(
+        db,
+        job_name="financial_advisor",
+        org_id=org_id,
+        requested_by=user_id,
+        input_payload={"question": question} if question else None,
+    )
 
     await inngest_client.send(
         inngest.Event(
             name=EVENT_NAME,
-            data={"job_id": job["id"], "org_id": org_id, "requested_by": user_id},
+            data={"job_id": job["id"], "org_id": org_id, "requested_by": user_id, "question": question},
         )
     )
     return job

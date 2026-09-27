@@ -6,7 +6,8 @@ the job_id right away.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Response
+from pydantic import BaseModel
 from supabase import Client
 
 from app.security import CurrentUser
@@ -16,9 +17,20 @@ from services import agent_job_service
 router = APIRouter(prefix="/agent-jobs", tags=["agent-jobs"])
 
 
+class FinancialAdviceRequest(BaseModel):
+    question: str | None = None
+
+
 @router.post("/financial-advice", status_code=202)
-async def request_financial_advice(response: Response, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_db)):
-    job = await agent_job_service.trigger_financial_advice_job(db, org_id=user.org_id, user_id=user.user_id)
+async def request_financial_advice(
+    response: Response,
+    body: FinancialAdviceRequest = Body(default_factory=FinancialAdviceRequest),
+    user: CurrentUser = Depends(get_current_user),
+    db: Client = Depends(get_db),
+):
+    job = await agent_job_service.trigger_financial_advice_job(
+        db, org_id=user.org_id, user_id=user.user_id, question=body.question
+    )
     return {"job_id": job["id"], "status": job["status"], "message": "Financial advice job accepted for background processing."}
 
 
