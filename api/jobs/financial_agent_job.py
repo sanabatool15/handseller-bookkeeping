@@ -28,7 +28,7 @@ import inngest
 
 logger = logging.getLogger(__name__)
 
-from app.clients import get_supabase
+from core.clients import get_supabase
 from jobs.inngest_client import inngest_client
 from repository import agent_jobs_repository
 from ai_agents.api.financial_advisor_agent import run_bookkeeping_agent

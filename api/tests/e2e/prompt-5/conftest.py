@@ -91,8 +91,8 @@ def _wire_real_infra():
         yield
         return
 
-    from app.clients import set_redis, set_supabase
-    from app.config import get_settings
+    from core.clients import set_redis, set_supabase
+    from core.config import get_settings
     from supabase import create_client
     import redis.asyncio as aioredis
 
@@ -105,7 +105,7 @@ def _wire_real_infra():
 @pytest.fixture
 def client():
     from fastapi.testclient import TestClient
-    from app.main import app
+    from core.main import app
 
     with TestClient(app) as c:
         yield c
@@ -113,7 +113,7 @@ def client():
 
 @pytest.fixture
 def db():
-    from app.clients import get_supabase
+    from core.clients import get_supabase
 
     return get_supabase()
 

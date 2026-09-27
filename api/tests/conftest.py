@@ -3,7 +3,7 @@ from __future__ import annotations
 import fakeredis.aioredis
 import pytest
 
-from app.clients import set_redis, set_supabase
+from core.clients import set_redis, set_supabase
 from tests.fakes import FakeSupabase
 
 

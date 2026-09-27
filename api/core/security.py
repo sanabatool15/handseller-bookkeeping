@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import jwt
 
-from app.config import get_settings
+from core.config import get_settings
 
 
 @dataclass(frozen=True)

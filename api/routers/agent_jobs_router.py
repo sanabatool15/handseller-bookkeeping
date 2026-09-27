@@ -10,7 +10,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from pydantic import BaseModel
 from supabase import Client
 
-from app.security import CurrentUser
+from core.security import CurrentUser
 from routers.deps import get_current_user, get_db
 from services import agent_job_service
 

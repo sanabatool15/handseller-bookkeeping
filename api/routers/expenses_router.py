@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from supabase import Client
 
-from app.security import CurrentUser
+from core.security import CurrentUser
 from routers.deps import get_current_user, get_db
 from services import expenses_service
 

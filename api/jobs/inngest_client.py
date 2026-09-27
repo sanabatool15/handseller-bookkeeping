@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import inngest
 
-from app.config import get_settings
+from core.config import get_settings
 
 _settings = get_settings()
 

@@ -8,7 +8,7 @@ import os
 from supabase import Client
 
 from repository import orgs_repository, users_repository
-from app.security import create_access_token
+from core.security import create_access_token
 
 
 class AuthError(Exception):

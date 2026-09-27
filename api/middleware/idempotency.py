@@ -19,8 +19,8 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from app.clients import get_redis_checked
-from app.config import get_settings
+from core.clients import get_redis_checked
+from core.config import get_settings
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH"}
 EXEMPT_PATHS = {"/auth/login", "/auth/register"}

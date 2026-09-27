@@ -121,8 +121,8 @@ def _wire_fakes():
         yield
         return
 
-    from app.clients import set_redis, set_supabase
-    from app.config import get_settings
+    from core.clients import set_redis, set_supabase
+    from core.config import get_settings
     from supabase import create_client
     import redis.asyncio as aioredis
 
@@ -135,7 +135,7 @@ def _wire_fakes():
 @pytest.fixture
 def client():
     from fastapi.testclient import TestClient
-    from app.main import app
+    from core.main import app
 
     with TestClient(app) as c:
         yield c
@@ -143,7 +143,7 @@ def client():
 
 @pytest.fixture
 def db():
-    from app.clients import get_supabase
+    from core.clients import get_supabase
 
     return get_supabase()
 
@@ -185,7 +185,7 @@ class Cleanup:
         for key in self._redis_keys:
             self._story.say(f"deleting redis key {key}")
             try:
-                from app.clients import get_redis
+                from core.clients import get_redis
 
                 r = get_redis()
                 asyncio.get_event_loop().run_until_complete(r.delete(key))

@@ -147,11 +147,11 @@ repo, before trusting anything downstream of that import.
   if it touches an existing record, (d) return 404 (not 403) for
   cross-tenant access, (e) get a unit test (service, mocked repo) and an
   integration test (`TestClient`, `tests/fakes.py`).
-- **CORS is currently `allow_origins=["*"]`** in `app/main.py` — this is
+- **CORS is currently `allow_origins=["*"]`** in `core/main.py` — this is
   flagged in the README's Production Readiness Review as dev-only. Lock this
   down to real origins before any actual production deployment; don't leave
   it wildcard and call it "done."
-- **Password hashing** is hand-rolled PBKDF2-HMAC-SHA256 (`app/security.py`
+- **Password hashing** is hand-rolled PBKDF2-HMAC-SHA256 (`core/security.py`
   or wherever it lives) specifically because no bcrypt/passlib dependency was
   in scope. If you add one later, migrate deliberately (existing password
   hashes won't verify against a different scheme) rather than silently
@@ -166,14 +166,42 @@ Python Serverless Function. Everything below assumes your shell's cwd is
 
 `api/index.py` is the only top-level `.py` file directly in `api/` — Vercel
 treats any such file as a function entrypoint, so it must stay the single
-one. It imports the real app from `app/main.py` and mounts it at `/api`; the
-root `vercel.json` rewrites every `/api/*` request to this function. Do not
-add another top-level `.py` file in `api/` unless you intend it to become a
+one. It imports the real app from `core/main.py` and strips the `/api`
+prefix off the incoming path before dispatching to it; the root
+`vercel.json` rewrites every `/api/*` request to this function. Do not add
+another top-level `.py` file in `api/` unless you intend it to become a
 second, separate serverless function.
 
-`api/requirements.txt` mirrors `pyproject.toml`'s dependencies for Vercel's
-Python builder (it reads `requirements.txt`, not `pyproject.toml`) — keep
-them in sync when either changes.
+**The backend package is named `core/`, not `app/` (or `src/`), on
+purpose.** Vercel's Python runtime treats `api/app/` and `api/src/` as
+*reserved entrypoint-scanning folders* — it looks for
+app.py/index.py/server.py/main.py/wsgi.py/asgi.py both at the top level of
+`api/` and inside those two folder names specifically. This repo used to
+have `api/app/main.py`, which Vercel treated as a *second, independent*
+valid entrypoint alongside `api/index.py` (both define a top-level `app`
+variable) — it built both as separate functions and the resulting routing
+ambiguity broke the deployed site's `/` route entirely, even though the
+Next.js build itself succeeded. **Do not rename `core/` back to `app/`, or
+add any folder literally named `app/` or `src/` anywhere under `api/`** —
+that reintroduces the exact collision (verified against Vercel's own docs:
+https://vercel.com/docs/functions/runtimes/python and
+https://vercel.com/docs/functions/runtimes/python/api-directory).
+
+`api/requirements.txt` and `api/pyproject.toml`'s `[project.dependencies]`
+list the same dependencies in two formats — Vercel's Python builder reads
+either `pyproject.toml`, `requirements.txt`, or a `Pipfile` (it actually
+prefers `pyproject.toml` when present, which is what originally exposed the
+package-collision bug below). Keep both in sync when either changes; local
+Docker/dev tooling uses `requirements.txt` directly.
+
+**Do not add a `[build-system]`/`[tool.setuptools] packages = [...]`
+section back to `pyproject.toml`.** It used to declare all 8 backend
+subpackages, and Vercel's `uv`-based builder read that as 8 separate
+installable workspace members, installing dependencies once per package
+(visible in the build log as repeated "Installing required dependencies"
+cycles) instead of once for the whole app. This project is never `pip
+install`ed as a distributable package — pytest resolves imports via `cwd`,
+no editable install needed.
 
 ## Running things
 
@@ -181,7 +209,7 @@ See `README.md` for full instructions. Quick reference (run from `api/`):
 
 ```bash
 # tests (fast, no network/DB required)
-pip install -e ".[dev]"
+pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/unit tests/integration -v
 
 # e2e (needs docker compose up + real Supabase with sql/schema.sql applied)
@@ -190,7 +218,7 @@ RUN_E2E=1 pytest tests/e2e -v
 # run the app standalone (unprefixed routes, e.g. for docker-compose/Inngest dev)
 cp .env.example .env   # fill in real Supabase/Redis/OpenAI/Inngest values
 docker compose up --build
-# or: uvicorn app.main:app --reload
+# or: uvicorn core.main:app --reload
 
 # run the app the way Vercel/the frontend's dev proxy expect (routes under /api)
 uvicorn index:app --reload --port 8000

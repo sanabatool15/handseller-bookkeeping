@@ -4,8 +4,8 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException, Request
 from supabase import Client
 
-from app.clients import get_supabase
-from app.security import CurrentUser
+from core.clients import get_supabase
+from core.security import CurrentUser
 
 
 def get_current_user(request: Request) -> CurrentUser:

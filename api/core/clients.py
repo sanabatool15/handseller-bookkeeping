@@ -11,7 +11,7 @@ from typing import Optional
 import redis.asyncio as aioredis
 from supabase import Client, create_client
 
-from app.config import get_settings
+from core.config import get_settings
 
 _supabase_client: Optional[Client] = None
 _redis_client: Optional[aioredis.Redis] = None

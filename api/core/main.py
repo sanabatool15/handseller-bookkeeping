@@ -14,8 +14,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from app.clients import close_clients, get_redis, get_supabase
-from app.config import get_settings
+from core.clients import close_clients, get_redis, get_supabase
+from core.config import get_settings
 from middleware.auth import AuthMiddleware
 from middleware.idempotency import IdempotencyMiddleware
 from routers import agent_jobs_router, auth_router, expenses_router, sales_router

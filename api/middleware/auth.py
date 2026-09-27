@@ -12,7 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse
 
-from app.security import TokenError, decode_access_token
+from core.security import TokenError, decode_access_token
 
 PUBLIC_PATHS = {
     "/",

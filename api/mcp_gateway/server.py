@@ -22,8 +22,8 @@ import logging
 
 from fastmcp import Context, FastMCP
 
-from app.clients import get_supabase
-from app.config import get_settings
+from core.clients import get_supabase
+from core.config import get_settings
 from ai_agents.prompt_loader import load_prompt
 from repository import agent_jobs_repository
 from services import expenses_service, sales_service
