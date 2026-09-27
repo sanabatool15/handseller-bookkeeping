@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, FormEvent } from "react";
-import { Send, Sparkles, ExternalLink } from "lucide-react";
+import { Send, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { VoiceButton } from "@/components/advisor/voice-button";
@@ -153,26 +153,13 @@ export default function AdvisorPage() {
             {turn.job?.status === "completed" && turn.job.result && (
               <Card className="max-w-[85%]">
                 <CardContent className="flex flex-col gap-2 py-4 text-sm">
-                  <p className="text-foreground">{turn.job.result.advice.summary}</p>
-                  {turn.job.result.advice.root_cause && (
-                    <p>
-                      <span className="font-medium text-olive">Root cause: </span>
-                      {turn.job.result.advice.root_cause}
+                  <p className="whitespace-pre-wrap text-foreground">
+                    {turn.job.result.advice}
+                  </p>
+                  {turn.job.result.source === "rule_based_fallback" && (
+                    <p className="text-xs text-muted-foreground">
+                      Generated offline — the AI advisor was unavailable.
                     </p>
-                  )}
-                  {turn.job.result.advice.recommendation && (
-                    <p>
-                      <span className="font-medium text-olive">Recommendation: </span>
-                      {turn.job.result.advice.recommendation}
-                    </p>
-                  )}
-                  {turn.job.result.advice.record_reference && (
-                    <a
-                      href="#"
-                      className="mt-1 inline-flex items-center gap-1 text-xs font-medium text-olive underline"
-                    >
-                      View record <ExternalLink className="h-3 w-3" />
-                    </a>
                   )}
                 </CardContent>
               </Card>

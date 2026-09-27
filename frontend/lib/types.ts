@@ -42,13 +42,13 @@ export interface LedgerEntryInput {
 
 export type AgentJobStatus = "pending" | "processing" | "completed" | "failed";
 
-export interface BookkeepingResult {
-  mode: "investigation" | "record_entry";
-  summary: string;
-  root_cause?: string | null;
-  recommendation?: string | null;
-  used_web_search: boolean;
-  record_reference?: string | null;
+export interface AgentJobResult {
+  // jobs/financial_agent_job.py always produces a plain string here (both
+  // the live agent path in run_financial_advisor() and the offline
+  // rule_based_financial_advice() fallback return str, not a structured
+  // BookkeepingResult object) -- never assume this is an object.
+  advice: string;
+  source: "openai_agent" | "rule_based_fallback" | string;
 }
 
 export interface AgentJob {
@@ -59,7 +59,7 @@ export interface AgentJob {
   status: AgentJobStatus;
   current_step?: string | null;
   input_payload?: Record<string, unknown>;
-  result?: { advice: BookkeepingResult; source: string } | null;
+  result?: AgentJobResult | null;
   error_details?: string | null;
   created_at: string;
   updated_at: string;
