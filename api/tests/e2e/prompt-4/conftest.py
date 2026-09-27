@@ -135,7 +135,7 @@ def _wire_fakes():
 @pytest.fixture
 def client():
     from fastapi.testclient import TestClient
-    from core.main import app
+    from core.fastapi_app import app
 
     with TestClient(app) as c:
         yield c

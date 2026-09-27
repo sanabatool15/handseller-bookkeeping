@@ -260,7 +260,7 @@ This starts:
 - `api` — the FastAPI app (also serves the Inngest handler at `/api/inngest`)
 - `inngest-worker` — a second copy of the same image on a different port, for
   deployments that want to scale Inngest-invoked traffic separately from
-  user-facing API traffic (both run the identical `core.main:app`)
+  user-facing API traffic (both run the identical `core.fastapi_app:app`)
 
 Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 `http://localhost:8000/docs` for the FastAPI OpenAPI docs.
@@ -271,7 +271,7 @@ Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt -r requirements-dev.txt
 cp .env.example .env
-uvicorn core.main:app --reload
+uvicorn core.fastapi_app:app --reload
 ```
 
 ## Running tests
@@ -314,7 +314,7 @@ Example Claude Desktop config entry:
 At the end of building this system, a self-review pass was performed and the
 following changes were made:
 
-1. **Global exception handlers** added to `core/main.py` for
+1. **Global exception handlers** added to `core/fastapi_app.py` for
    `StarletteHTTPException`, `RequestValidationError`, and a catch-all
    `Exception` handler that logs the full traceback server-side but returns
    a generic `500` to the client (never leaks internals).

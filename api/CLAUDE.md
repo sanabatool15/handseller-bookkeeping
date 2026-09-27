@@ -147,7 +147,7 @@ repo, before trusting anything downstream of that import.
   if it touches an existing record, (d) return 404 (not 403) for
   cross-tenant access, (e) get a unit test (service, mocked repo) and an
   integration test (`TestClient`, `tests/fakes.py`).
-- **CORS is currently `allow_origins=["*"]`** in `core/main.py` — this is
+- **CORS is currently `allow_origins=["*"]`** in `core/fastapi_app.py` — this is
   flagged in the README's Production Readiness Review as dev-only. Lock this
   down to real origins before any actual production deployment; don't leave
   it wildcard and call it "done."
@@ -166,26 +166,34 @@ Python Serverless Function. Everything below assumes your shell's cwd is
 
 `api/index.py` is the only top-level `.py` file directly in `api/` — Vercel
 treats any such file as a function entrypoint, so it must stay the single
-one. It imports the real app from `core/main.py` and strips the `/api`
+one. It imports the real app from `core/fastapi_app.py` and strips the `/api`
 prefix off the incoming path before dispatching to it; the root
 `vercel.json` rewrites every `/api/*` request to this function. Do not add
 another top-level `.py` file in `api/` unless you intend it to become a
 second, separate serverless function.
 
-**The backend package is named `core/`, not `app/` (or `src/`), on
-purpose.** Vercel's Python runtime treats `api/app/` and `api/src/` as
-*reserved entrypoint-scanning folders* — it looks for
-app.py/index.py/server.py/main.py/wsgi.py/asgi.py both at the top level of
-`api/` and inside those two folder names specifically. This repo used to
-have `api/app/main.py`, which Vercel treated as a *second, independent*
-valid entrypoint alongside `api/index.py` (both define a top-level `app`
-variable) — it built both as separate functions and the resulting routing
-ambiguity broke the deployed site's `/` route entirely, even though the
-Next.js build itself succeeded. **Do not rename `core/` back to `app/`, or
-add any folder literally named `app/` or `src/` anywhere under `api/`** —
-that reintroduces the exact collision (verified against Vercel's own docs:
-https://vercel.com/docs/functions/runtimes/python and
-https://vercel.com/docs/functions/runtimes/python/api-directory).
+**Only `api/index.py` may define a top-level `app`/`application`/`handler`
+binding anywhere under `api/`.** Vercel's Python runtime scans every `.py`
+file under `api/` for one of those names and turns each match into its own
+separate serverless function — this is NOT limited to specially-named
+top-level files or to `app/`/`src/` subfolders specifically; renaming the
+backend package folder from `app/` to `core/` alone did not stop it. The
+real FastAPI app used to live at `api/app/main.py`, then `api/core/main.py`
+— both times Vercel treated that file as a *second, independent* entrypoint
+alongside `api/index.py` (both define a top-level `app`), built two
+competing functions (visible in the build log as repeated
+dependency-install cycles), and the resulting routing ambiguity broke the
+deployed site's `/` route entirely, even though the Next.js build itself
+succeeded. The fix was renaming the FILE to `api/core/fastapi_app.py` — a
+name outside Vercel's reserved entrypoint list
+(app.py/index.py/server.py/main.py/wsgi.py/asgi.py). **Never name the real
+app's module `main.py` (or any of that list) anywhere under `api/`, and
+never give any other file under `api/` a top-level `app`/`application`/
+`handler` binding** — that reintroduces the exact collision (see Vercel's
+own docs: https://vercel.com/docs/functions/runtimes/python and
+https://vercel.com/docs/functions/runtimes/python/api-directory — though
+note the observed behavior here is broader than what those pages state
+explicitly).
 
 `api/requirements.txt` and `api/pyproject.toml`'s `[project.dependencies]`
 list the same dependencies in two formats — Vercel's Python builder reads
@@ -218,7 +226,7 @@ RUN_E2E=1 pytest tests/e2e -v
 # run the app standalone (unprefixed routes, e.g. for docker-compose/Inngest dev)
 cp .env.example .env   # fill in real Supabase/Redis/OpenAI/Inngest values
 docker compose up --build
-# or: uvicorn core.main:app --reload
+# or: uvicorn core.fastapi_app:app --reload
 
 # run the app the way Vercel/the frontend's dev proxy expect (routes under /api)
 uvicorn index:app --reload --port 8000

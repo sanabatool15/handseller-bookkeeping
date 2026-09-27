@@ -44,4 +44,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Default: run the FastAPI app (which itself mounts the Inngest handler).
 # Override CMD to `python mcp_gateway/server.py` to run the MCP stdio server instead.
-CMD ["uvicorn", "core.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "core.fastapi_app:app", "--host", "0.0.0.0", "--port", "8000"]

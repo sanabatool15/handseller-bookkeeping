@@ -43,7 +43,7 @@ from fastapi.testclient import TestClient
 os.environ.setdefault("APP_ENV", "test")
 
 from core.clients import get_redis, get_supabase, set_redis, set_supabase  # noqa: E402
-from core.main import app  # noqa: E402
+from core.fastapi_app import app  # noqa: E402
 from core.config import get_settings  # noqa: E402
 from supabase import create_client  # noqa: E402
 import redis.asyncio as aioredis  # noqa: E402
