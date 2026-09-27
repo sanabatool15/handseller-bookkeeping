@@ -1,7 +1,8 @@
-const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000").replace(
-  /\/+$/,
-  ""
-);
+// Same-origin by default (frontend + backend are one Vercel deployment,
+// backend reachable under /api -- see vercel.json's rewrite and
+// api/index.py). Override NEXT_PUBLIC_API_URL for local dev against a
+// backend on a different origin/port than next.config.ts's dev proxy.
+const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "/api").replace(/\/+$/, "");
 
 export class ApiError extends Error {
   status: number;
