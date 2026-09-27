@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 from app.clients import get_supabase
 from jobs.inngest_client import inngest_client
 from repository import agent_jobs_repository
-from ai_agents.api.financial_advisor_agent import run_financial_advisor
+from ai_agents.api.financial_advisor_agent import run_bookkeeping_agent
 from ai_agents.rules.fallback_engine import rule_based_financial_advice
 
 EVENT_NAME = "financial/advice.requested"
@@ -52,20 +52,37 @@ async def _step_gather_data(job_id: str, org_id: str) -> dict[str, Any]:
     return summary
 
 
-async def _step_run_agent(job_id: str, org_id: str, summary: dict[str, Any]) -> dict[str, Any]:
+async def _step_run_agent(job_id: str, org_id: str, requested_by: str, question: str | None, summary: dict[str, Any]) -> dict[str, Any]:
     db = get_supabase()
     fallback_reason: str | None = None
+    # The user's actual chat message (question) is the real request; a
+    # missing question (e.g. a proactive/scheduled trigger with no chat
+    # turn behind it) falls back to a generic "how's the business doing"
+    # investigation prompt so the job still produces something useful.
+    user_message = question or (
+        "Here is this month's financial summary as JSON:\n"
+        f"{summary}\n"
+        "How is the business doing, and what's the single most important thing to act on?"
+    )
     try:
-        # run_financial_advisor drives the planner -> handoff -> specialist
-        # chain (Runner.run_streamed, starting at planner_agent) internally
-        # — see ai_agents/api/financial_advisor_agent.py. This job never
-        # touches the OpenAI Agents SDK directly, only through that module.
-        advice = await run_financial_advisor(db, summary)
+        # run_bookkeeping_agent drives the planner -> handoff -> specialist
+        # chain (Runner.run_streamed, starting at planner_agent) — this is
+        # what actually lets the LLM choose investigate_agent vs
+        # record_agent and call their tools. This job never touches the
+        # OpenAI Agents SDK directly, only through that module.
+        outcome = await run_bookkeeping_agent(
+            db,
+            org_id=org_id,
+            user_id=requested_by,
+            user_message=user_message,
+            fallback_summary=summary,
+        )
+        advice = outcome["result"]
         source = "openai_agent"
     except Exception as exc:  # noqa: BLE001 - deliberate fallback on ANY agent/API failure
         fallback_reason = f"{type(exc).__name__}: {exc}"
         logger.warning("Falling back to rule-based advice for job %s: %s", job_id, fallback_reason)
-        advice = rule_based_financial_advice(summary)
+        advice = {"mode": "investigation", "summary": rule_based_financial_advice(summary)}
         source = "rule_based_fallback"
 
     result = {"advice": advice, "source": source}
@@ -111,9 +128,13 @@ async def on_failure_handler(ctx: inngest.Context) -> None:
 async def financial_advisor_job(ctx: inngest.Context) -> dict[str, Any]:
     job_id = ctx.event.data["job_id"]
     org_id = ctx.event.data["org_id"]
+    requested_by = ctx.event.data.get("requested_by") or "system"
+    question = ctx.event.data.get("question")
 
     summary = await ctx.step.run("gather-data", lambda: _step_gather_data(job_id, org_id))
-    agent_result = await ctx.step.run("run-agent", lambda: _step_run_agent(job_id, org_id, summary))
+    agent_result = await ctx.step.run(
+        "run-agent", lambda: _step_run_agent(job_id, org_id, requested_by, question, summary)
+    )
     final = await ctx.step.run("finalize", lambda: _step_finalize(job_id, org_id, agent_result))
     return final
 
