@@ -42,12 +42,20 @@ export interface LedgerEntryInput {
 
 export type AgentJobStatus = "pending" | "processing" | "completed" | "failed";
 
+export interface BookkeepingAdvice {
+  // Matches ai_agents/api/financial_advisor_agent.py's BookkeepingResult.
+  // The rule-based fallback (jobs/financial_agent_job.py) only ever sets
+  // mode + summary, leaving the rest undefined -- treat them as optional.
+  mode: "investigation" | "record_entry";
+  summary: string;
+  root_cause?: string | null;
+  recommendation?: string | null;
+  used_web_search?: boolean;
+  record_reference?: string | null;
+}
+
 export interface AgentJobResult {
-  // jobs/financial_agent_job.py always produces a plain string here (both
-  // the live agent path in run_financial_advisor() and the offline
-  // rule_based_financial_advice() fallback return str, not a structured
-  // BookkeepingResult object) -- never assume this is an object.
-  advice: string;
+  advice: BookkeepingAdvice;
   source: "openai_agent" | "rule_based_fallback" | string;
 }
 

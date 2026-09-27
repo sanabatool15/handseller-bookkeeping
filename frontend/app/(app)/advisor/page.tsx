@@ -154,8 +154,28 @@ export default function AdvisorPage() {
               <Card className="max-w-[85%]">
                 <CardContent className="flex flex-col gap-2 py-4 text-sm">
                   <p className="whitespace-pre-wrap text-foreground">
-                    {turn.job.result.advice}
+                    {turn.job.result.advice.summary}
                   </p>
+                  {turn.job.result.advice.root_cause && (
+                    <p className="text-sm text-foreground">
+                      <span className="font-medium">Root cause: </span>
+                      {turn.job.result.advice.root_cause}
+                    </p>
+                  )}
+                  {turn.job.result.advice.recommendation && (
+                    <p className="text-sm text-foreground">
+                      <span className="font-medium">Recommendation: </span>
+                      {turn.job.result.advice.recommendation}
+                    </p>
+                  )}
+                  {turn.job.result.advice.record_reference && (
+                    <a
+                      href={turn.job.result.advice.record_reference}
+                      className="text-xs font-medium text-olive underline underline-offset-2"
+                    >
+                      View recorded entry
+                    </a>
+                  )}
                   {turn.job.result.source === "rule_based_fallback" && (
                     <p className="text-xs text-muted-foreground">
                       Generated offline — the AI advisor was unavailable.
