@@ -31,6 +31,11 @@ def _verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(expected.hex(), digest_hex)
 
 
+def _public_user(user: dict) -> dict:
+    """The user as returned over HTTP: never include the password hash."""
+    return {k: v for k, v in user.items() if k != "hashed_password"}
+
+
 def register(db: Db, *, email: str, password: str, full_name: str | None, org_name: str) -> dict:
     # Cheap pre-check for the common case; the UNIQUE constraint on users.email is the
     # real guard (two concurrent registrations can both pass this check).
@@ -50,7 +55,7 @@ def register(db: Db, *, email: str, password: str, full_name: str | None, org_na
         raise AuthError("Email already registered") from exc
 
     token = create_access_token(user_id=user["id"], org_id=org["id"], role="owner", email=email)
-    return {"access_token": token, "user": user, "org": org}
+    return {"access_token": token, "user": _public_user(user), "org": org}
 
 
 def login(db: Db, *, email: str, password: str) -> dict:
@@ -59,4 +64,4 @@ def login(db: Db, *, email: str, password: str) -> dict:
         raise AuthError("Invalid email or password")
 
     token = create_access_token(user_id=user["id"], org_id=user["org_id"], role=user.get("role", "member"), email=email)
-    return {"access_token": token, "user": user}
+    return {"access_token": token, "user": _public_user(user)}

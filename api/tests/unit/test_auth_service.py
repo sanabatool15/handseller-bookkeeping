@@ -60,3 +60,10 @@ def test_duplicate_email_race_maps_unique_violation_to_autherror(sql_store, monk
     with pytest.raises(auth_service.AuthError, match="Email already registered"):
         _register(db)
     assert db.rollbacks == 1 and len(sql_store.users) == 1 and len(sql_store.orgs) == 1
+
+
+def test_register_and_login_never_return_password_hash(fake_db):
+    registered = auth_service.register(fake_db, email="hash@example.com", password="pw-12345678", full_name=None, org_name="Org")
+    assert "hashed_password" not in registered["user"]
+    logged_in = auth_service.login(fake_db, email="hash@example.com", password="pw-12345678")
+    assert "hashed_password" not in logged_in["user"]
