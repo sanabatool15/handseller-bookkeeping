@@ -1,10 +1,10 @@
 """Shared fixtures for the prompt-2 real-infra e2e suite.
 
 Unlike `tests/e2e/prompt-1/conftest.py`, this suite does NOT wire
-FakeSupabase or fakeredis. `client` here is a plain `TestClient(app)` that
+the in-memory fakes or fakeredis. `client` here is a plain `TestClient(app)` that
 exercises the app exactly as `docker compose up` / `uvicorn app.main:app`
-would: `app.clients.get_supabase()` returns a real `supabase.Client` talking
-to `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` from `.env`, and
+would: `core.clients.get_db_connection()` returns a a real SQL Server connection talking
+the `MSSQL_*` settings from `.env`, and
 `app.clients.get_redis()` returns a real `redis.asyncio` client talking to
 `REDIS_URL`. If those endpoints are not reachable in the current
 environment, requests will fail with connection errors (surfaced as 500s or
@@ -26,9 +26,9 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("APP_ENV", "test")
 
-from core.clients import get_redis, get_supabase, set_redis, set_supabase  # noqa: E402
+from core.clients import get_redis, set_db_factory, set_redis  # noqa: E402
 from core.fastapi_app import app  # noqa: E402
-from supabase import create_client  # noqa: E402
+from tests.e2e import e2e_db  # noqa: E402
 from core.config import get_settings  # noqa: E402
 import redis.asyncio as aioredis  # noqa: E402
 
@@ -41,23 +41,29 @@ def unique_email(tag: str) -> str:
 def _wire_fakes():
     """Overrides the repo-root `tests/conftest.py`'s autouse `_wire_fakes`
     fixture of the SAME NAME, which would otherwise silently inject
-    FakeSupabase + fakeredis into every test under `tests/`, including this
+    in-memory fakes + fakeredis into every test under `tests/`, including this
     directory. pytest fixture resolution prefers the closest conftest, so
     this shadowing definition wins for every test collected under
     `tests/e2e/prompt-2/` and makes sure the app's client singletons point
-    at REAL Supabase/Redis clients built straight from `.env`, exactly as
+    at REAL SQL Server/Redis clients built straight from `.env`, exactly as
     `docker compose up` / `uvicorn app.main:app` would construct them --
     never at fakes.
     """
     settings = get_settings()
-    set_supabase(create_client(settings.supabase_url, settings.supabase_service_key))
     set_redis(aioredis.from_url(settings.redis_url, decode_responses=True))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _wire_sql_fakes():
+    """Shadows tests/conftest.py's autouse fixture of the same name: real SQL Server, real repositories."""
+    set_db_factory(None)
     yield
 
 
 @pytest.fixture
 def client():
-    """Real TestClient — no fakes wired. Talks to whatever SUPABASE_URL /
+    """Real TestClient — no fakes wired. Talks to whatever MSSQL_* /
     REDIS_URL / INNGEST_BASE_URL are configured in the environment (.env)."""
     with TestClient(app) as c:
         yield c
@@ -65,9 +71,12 @@ def client():
 
 @pytest.fixture
 def db():
-    """Direct handle to the real Supabase client, for teardown-time deletes
+    """Direct handle to a real SQL Server connection, for teardown-time deletes
     and for asserting on DB state the HTTP surface doesn't expose."""
-    return get_supabase()
+    conn = e2e_db.connect()
+    yield conn
+    conn.rollback()
+    conn.close()
 
 
 @pytest.fixture
@@ -103,10 +112,7 @@ class Cleanup:
         # agent_jobs/users) go before parents (orgs).
         for table, record_id, org_id in reversed(self._rows):
             try:
-                q = self._db.table(table).delete().eq("id", record_id)
-                if org_id is not None and table != "orgs":
-                    q = q.eq("org_id", org_id)
-                q.execute()
+                e2e_db.delete_tracked(self._db, table, record_id, org_id)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"cleanup failed for {table}:{record_id}: {exc!r}")
         for key in self._redis_keys:

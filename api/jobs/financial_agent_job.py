@@ -4,7 +4,7 @@ Runs the financial-advisor agent as a resilient, multi-step background job.
 Each step is wrapped in `ctx.step.run(...)`, which Inngest memoizes: if the
 function crashes/retries after step 2, step 1's memoized result is replayed
 instead of re-executed. On top of Inngest's own step memoization we ALSO
-persist progress to `agent_jobs`/`agent_logs` in Postgres (per the spec), so
+persist progress to `agent_jobs`/`agent_logs` in SQL Server (per the spec), so
 job state is visible to the rest of the app (e.g. a status-polling endpoint)
 independently of Inngest's internal step cache.
 
@@ -28,7 +28,7 @@ import inngest
 
 logger = logging.getLogger(__name__)
 
-from core.clients import get_supabase
+from core.clients import db_session, run_in_db
 from jobs.inngest_client import inngest_client
 from repository import agent_jobs_repository
 from ai_agents.api.financial_advisor_agent import run_bookkeeping_agent
@@ -38,22 +38,25 @@ EVENT_NAME = "financial/advice.requested"
 
 
 async def _step_gather_data(job_id: str, org_id: str) -> dict[str, Any]:
-    db = get_supabase()
     from services.financial_report_service import monthly_summary
 
     now = dt.datetime.utcnow()
-    summary = monthly_summary(db, org_id=org_id, year=now.year, month=now.month)
-    agent_jobs_repository.add_log(
-        db, job_id=job_id, step_name="gather_data",
-        action_summary="Collected current-month sales/expense totals from the ledger.",
-        insights_generated=summary,
-    )
-    agent_jobs_repository.update_job_status(db, job_id=job_id, org_id=org_id, status="processing", current_step="gather_data")
-    return summary
+
+    def work(db) -> dict[str, Any]:
+        summary = monthly_summary(db, org_id=org_id, year=now.year, month=now.month)
+        agent_jobs_repository.add_log(
+            db, job_id=job_id, org_id=org_id, step_name="gather_data",
+            action_summary="Collected current-month sales/expense totals from the ledger.",
+            insights_generated=summary,
+        )
+        agent_jobs_repository.update_job_status(db, job_id=job_id, org_id=org_id, status="processing", current_step="gather_data")
+        return summary
+
+    # One transaction per step (committed together); re-run on a deadlock victim.
+    return run_in_db(work)
 
 
 async def _step_run_agent(job_id: str, org_id: str, requested_by: str, question: str | None, summary: dict[str, Any]) -> dict[str, Any]:
-    db = get_supabase()
     fallback_reason: str | None = None
     # The user's actual chat message (question) is the real request; a
     # missing question (e.g. a proactive/scheduled trigger with no chat
@@ -64,58 +67,61 @@ async def _step_run_agent(job_id: str, org_id: str, requested_by: str, question:
         f"{summary}\n"
         "How is the business doing, and what's the single most important thing to act on?"
     )
-    try:
-        # run_bookkeeping_agent drives the planner -> handoff -> specialist
-        # chain (Runner.run_streamed, starting at planner_agent) — this is
-        # what actually lets the LLM choose investigate_agent vs
-        # record_agent and call their tools. This job never touches the
-        # OpenAI Agents SDK directly, only through that module.
-        outcome = await run_bookkeeping_agent(
-            db,
-            org_id=org_id,
-            user_id=requested_by,
-            user_message=user_message,
-            fallback_summary=summary,
-        )
-        advice = outcome["result"]
-        source = "openai_agent"
-    except Exception as exc:  # noqa: BLE001 - deliberate fallback on ANY agent/API failure
-        fallback_reason = f"{type(exc).__name__}: {exc}"
-        logger.warning("Falling back to rule-based advice for job %s: %s", job_id, fallback_reason)
-        advice = {"mode": "investigation", "summary": rule_based_financial_advice(summary)}
-        source = "rule_based_fallback"
+    with db_session() as db:
+        try:
+            # run_bookkeeping_agent drives the planner -> handoff -> specialist
+            # chain (Runner.run_streamed, starting at planner_agent) — this is
+            # what actually lets the LLM choose investigate_agent vs
+            # record_agent and call their tools. This job never touches the
+            # OpenAI Agents SDK directly, only through that module.
+            outcome = await run_bookkeeping_agent(
+                db,
+                org_id=org_id,
+                user_id=requested_by,
+                user_message=user_message,
+                fallback_summary=summary,
+            )
+            advice = outcome["result"]
+            source = "openai_agent"
+        except Exception as exc:  # noqa: BLE001 - deliberate fallback on ANY agent/API failure
+            fallback_reason = f"{type(exc).__name__}: {exc}"
+            db.rollback()  # discard any half-finished writes of the failed agent run (and clear a failed transaction)
+            logger.warning("Falling back to rule-based advice for job %s: %s", job_id, fallback_reason)
+            advice = {"mode": "investigation", "summary": rule_based_financial_advice(summary)}
+            source = "rule_based_fallback"
 
-    result = {"advice": advice, "source": source}
-    agent_jobs_repository.add_log(
-        db, job_id=job_id, step_name="run_agent",
-        action_summary=f"Generated financial advice via {source}.",
-        insights_generated={**result, "fallback_reason": fallback_reason} if fallback_reason else result,
-    )
-    agent_jobs_repository.update_job_status(db, job_id=job_id, org_id=org_id, status="processing", current_step="run_agent")
-    return result
+        result = {"advice": advice, "source": source}
+        agent_jobs_repository.add_log(
+            db, job_id=job_id, org_id=org_id, step_name="run_agent",
+            action_summary=f"Generated financial advice via {source}.",
+            insights_generated={**result, "fallback_reason": fallback_reason} if fallback_reason else result,
+        )
+        agent_jobs_repository.update_job_status(db, job_id=job_id, org_id=org_id, status="processing", current_step="run_agent")
+        return result
 
 
 async def _step_finalize(job_id: str, org_id: str, result: dict[str, Any]) -> dict[str, Any]:
-    db = get_supabase()
-    agent_jobs_repository.add_log(
-        db, job_id=job_id, step_name="finalize",
-        action_summary="Marked job completed and persisted final result.",
-        insights_generated=result,
-    )
-    agent_jobs_repository.update_job_status(db, job_id=job_id, org_id=org_id, status="completed", current_step="finalize", result=result)
+    def work(db) -> None:
+        agent_jobs_repository.add_log(
+            db, job_id=job_id, org_id=org_id, step_name="finalize",
+            action_summary="Marked job completed and persisted final result.",
+            insights_generated=result,
+        )
+        agent_jobs_repository.update_job_status(db, job_id=job_id, org_id=org_id, status="completed", current_step="finalize", result=result)
+
+    run_in_db(work)
     return result
 
 
 async def on_failure_handler(ctx: inngest.Context) -> None:
     """Registered via on_failure so exhausted retries still mark the job failed."""
-    db = get_supabase()
     job_id = ctx.event.data.get("job_id")
     org_id = ctx.event.data.get("org_id")
     if job_id and org_id:
-        agent_jobs_repository.update_job_status(
+        run_in_db(lambda db: agent_jobs_repository.update_job_status(
             db, job_id=job_id, org_id=org_id, status="failed",
             error_details={"message": "All retries exhausted", "event": ctx.event.data},
-        )
+        ))
 
 
 @inngest_client.create_function(

@@ -11,7 +11,7 @@ instance. This test requires:
   - `INNGEST_BASE_URL` (default http://localhost:8288) reachable, with the
     dev server registered against this app's `/api/inngest` endpoint (i.e.
     `docker compose up`, which runs both), and
-  - a real Postgres/Supabase instance with `sql/schema.sql` applied.
+  - a real SQL Server with sql_server/01_foundation.sql and 02_sales_expenses_agents.sql applied.
 
 It intentionally does NOT import or call `jobs/financial_agent_job.py`'s
 step functions directly -- that would be simulating the job in-process,

@@ -1,7 +1,7 @@
 # Handseller Bookkeeping Backend
 
 A production-oriented backend for a handseller bookkeeping application:
-FastAPI + Supabase (Postgres) + Redis + Inngest (resilient background jobs)
+FastAPI + Microsoft SQL Server (pyodbc; was Supabase/Postgres until slice F0b) + Redis + Inngest (resilient background jobs)
 + FastMCP (Model Context Protocol server over stdio) + the OpenAI Agents SDK,
 with a rule-based offline fallback for AI-generated financial advice.
 
@@ -10,7 +10,7 @@ with a rule-based offline fallback for AI-generated financial advice.
 ```
 routers/       FastAPI route handlers ONLY (no business logic, no SQL)
 services/      Business logic + validation (no direct DB access)
-repository/    The ONLY layer allowed to run Supabase queries
+repository/    The ONLY layer allowed to run SQL (T-SQL via core/db.py `Db`)
 middleware/    Auth (JWT) + Redis-backed Idempotency middleware
 jobs/          Inngest client + the financial-advisor background function
 mcp_gateway/   FastMCP server (stdio) — tools/resources/prompts/sampling/logging
@@ -20,8 +20,9 @@ ai_agents/     (renamed from agents/ — see "Package-name collisions, fixed" be
   api/         OpenAI Agents SDK orchestration
   rules/       Deterministic rule-based fallback (works fully offline)
   tools/       Utility functions (web search, deep-link generation)
-app/           FastAPI app wiring, settings, Supabase/Redis clients, JWT
-sql/           Postgres schema (apply to Supabase)
+core/          FastAPI app wiring, settings, SQL Server (`db.py`, `clients.py`)/Redis clients, JWT
+../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql (+ TEST_CASES.md)
+sql/           LEGACY Postgres/Supabase schema, kept for reference only (no longer used)
 tests/
   unit/        Mocked DB (in-memory fake) + fakeredis
   integration/ FastAPI TestClient against the same fakes
@@ -30,26 +31,25 @@ tests/
 
 ### Strict layering
 
-`routers/` never touches Supabase directly — it only calls into `services/`,
-which validates input and calls `repository/`, the only place `db.table(...)`
-is ever invoked. This is enforced by convention and code review, not a
-runtime check, but the four modules under `repository/` are the sole holders
-of Supabase query code in this repo (grep for `.table(` — it only appears
-there and in `mcp_gateway/server.py`'s ledger-reading path, which itself calls into
-`services/`).
+`routers/` never touches the database directly — it only calls into `services/`,
+which validates input and calls `repository/`, the only place `db.query/query_one/execute`
+is ever invoked. `tests/unit/test_repository_sql_rules.py` statically enforces the SQL rules
+(literal SQL only, `id` always with `org_id`, no SQL outside `repository/`). Jobs and the MCP
+server (which run outside FastAPI) get a connection from `core.clients.db_session()` and
+still only call services/repositories.
+
+> **Annotation (slice F0b):** earlier versions of this section described Supabase
+> `db.table(...)` calls; Supabase has been removed from the backend entirely.
 
 ## Database schema
 
-See `sql/schema.sql`. Tables: `users`, `orgs`, `sales`, `expenses`,
-`agent_jobs`, `agent_logs`. All tables have `created_at`/`updated_at` with an
-`updated_at` trigger. Row Level Security policies are included as
-defense-in-depth on top of the application-layer scoping described below.
+Run, in SSMS and in this order: `../sql_server/01_foundation.sql` (database `HandsellerDB`, `orgs`, `users`)
+and `../sql_server/02_sales_expenses_agents.sql` (`sales`, `expenses`, `agent_jobs`, `agent_logs`). Both are
+re-runnable. All tables have `created_at`/`updated_at` with an AFTER UPDATE trigger; there is **no Row Level
+Security** (the application-layer `org_id` scoping below is the control). `agent_logs` carries its own `org_id`.
+Manual checks: `../sql_server/TEST_CASES.md`. Details: `specs/13-sql-server-migration.md`.
 
-Apply it via the Supabase SQL editor, or:
-
-```bash
-supabase db push --file sql/schema.sql
-```
+> **Annotation:** `sql/schema.sql` is the old Supabase/Postgres schema (with RLS); it is no longer applied.
 
 ## Structural multi-tenancy (critical)
 
@@ -57,7 +57,7 @@ Every read/update/delete in `repository/*.py` filters by **both** `id` and
 `org_id` in the same database call, e.g.:
 
 ```python
-db.table("sales").select("*").eq("id", sale_id).eq("org_id", org_id).execute()
+db.query_one("SELECT TOP (1) * FROM sales WHERE id = ? AND org_id = ?", (sale_id, org_id))
 ```
 
 There is no code path that fetches a record by id alone and separately
@@ -250,8 +250,8 @@ logged via the REST API or via an MCP client.
 ### Docker Compose (FastAPI + Redis + Inngest Dev Server)
 
 ```bash
-cp .env.example .env   # fill in real Supabase/OpenAI values
-docker compose up --build
+cp .env.example .env   # fill in real MSSQL_*/OpenAI values
+docker compose up --build   # (compose files are NOT updated for SQL Server; the supported path now is uvicorn, see below)
 ```
 
 This starts:
@@ -265,15 +265,15 @@ This starts:
 Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 `http://localhost:8000/docs` for the FastAPI OpenAPI docs.
 
-### SQL Server environment variables (migration in progress, see `specs/13-sql-server-migration.md`)
+### SQL Server environment variables (see `specs/13-sql-server-migration.md`)
 
-Auth (`/auth/*`) already runs on SQL Server; sales/expenses/agent routes still use Supabase
-until later slices. Run `../sql_server/01_foundation.sql` in SSMS first, then set either
+Everything (auth, sales, expenses, agent jobs/logs, Inngest job steps, MCP server, agent tools) runs on
+SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` in SSMS first, then set either
 `MSSQL_CONNECTION_STRING` (full ODBC string) or `MSSQL_SERVER`, `MSSQL_DATABASE` (default
 `HandsellerDB`), `MSSQL_USER`/`MSSQL_PASSWORD` (empty user = Windows auth), `MSSQL_DRIVER`
 (default `ODBC Driver 18 for SQL Server`), `MSSQL_TRUST_SERVER_CERTIFICATE`. Requires the
-Microsoft ODBC driver on the machine running `uvicorn`. The `SUPABASE_*` variables remain
-required for the not-yet-migrated routes. Optional real-DB tests: `RUN_MSSQL=1 pytest tests/sqlserver -v`.
+Microsoft ODBC driver on the machine running `uvicorn` (and the MCP server). `SUPABASE_*` variables no longer exist.
+Optional real-DB tests: `RUN_MSSQL=1 pytest tests/sqlserver -v`.
 
 ### Locally without Docker
 
@@ -290,18 +290,19 @@ uvicorn core.fastapi_app:app --reload
 pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/unit tests/integration -v      # fast, fully mocked — no network/DB required
 pytest tests/e2e -v                          # skipped by default
-RUN_E2E=1 pytest tests/e2e -v                # requires `docker compose up` + real Supabase
+RUN_E2E=1 pytest tests/e2e -v                # requires Redis/Inngest + real SQL Server (see below)
 ```
 
-`tests/unit` and `tests/integration` use an in-memory fake Supabase client
-(`tests/fakes.py`) that mimics the chained query-builder API closely enough
-to exercise real repository filtering logic (including the id+org_id
-double-scoping), plus `fakeredis` for the idempotency middleware — no live
-network or database is touched. **37 tests pass, 1 e2e test is skipped by
-design** (see `tests/e2e/test_full_inngest_workflow.py`'s docstring): it
-requires a live `docker compose up` stack and a real Supabase/Postgres
-instance with `sql/schema.sql` applied, so it's gated behind `RUN_E2E=1`
-rather than left broken/uncommented.
+`tests/unit` and `tests/integration` replace every repository module with in-memory fakes
+(`tests/fake_repos.py`, installed by an autouse fixture) that enforce `id`+`org_id` scoping exactly like
+the SQL does, plus `fakeredis` for the idempotency middleware — no live network or database is touched.
+`tests/unit/test_repository_sql_shapes.py` runs the REAL repositories against a recording `Db` to check
+statements/parameters. `tests/sqlserver/` (gated by `RUN_MSSQL=1`) runs against a real SQL Server.
+`tests/e2e/prompt-2..5` and `test_full_inngest_workflow.py` need real infrastructure (`RUN_E2E=1`, or
+reachable SQL Server/Redis); their DB setup/cleanup goes through `tests/e2e/e2e_db.py`. They have NOT been run
+against SQL Server (none available while porting).
+
+> **Annotation:** earlier text described `tests/fakes.py` / `FakeSupabase` and "37 tests"; both are gone.
 
 ## Connecting an MCP client (stdio)
 
@@ -313,7 +314,7 @@ Example Claude Desktop config entry:
     "handseller-bookkeeping": {
       "command": "python",
       "args": ["/absolute/path/to/mcp_gateway/server.py"],
-      "env": { "SUPABASE_URL": "...", "SUPABASE_SERVICE_KEY": "..." }
+      "env": { "MSSQL_SERVER": "localhost", "MSSQL_DATABASE": "HandsellerDB", "MSSQL_CONNECTION_STRING": "" }
     }
   }
 }
@@ -329,7 +330,7 @@ following changes were made:
    `Exception` handler that logs the full traceback server-side but returns
    a generic `500` to the client (never leaks internals).
 2. **Health check endpoint** (`GET /health`) added that independently probes
-   Redis and Supabase connectivity, used by the Dockerfile's `HEALTHCHECK`.
+   Redis and SQL Server connectivity (`checks.database`; was `checks.supabase`), used by the Dockerfile's `HEALTHCHECK`.
 3. **Idempotency concurrency safety**: added a `SET NX EX 30` lock so two
    concurrent requests with the same `Idempotency-Key` can't both execute
    the handler — the loser gets `409 Conflict` instead of a duplicate write.

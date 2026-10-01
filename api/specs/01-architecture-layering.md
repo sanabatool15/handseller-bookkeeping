@@ -1,3 +1,5 @@
+> **Annotation (slice F0b):** the Supabase wording below (`db.table(...)`, `get_supabase`, `.table(` greps, "Supabase client as a parameter") is historical. Today the only DB-touching layer is `repository/*.py`, using `core.db.Db` (`query/query_one/execute`) with `?`-parameterised T-SQL; services take a `Db`; `grep -rn "\.execute(\|\.query(\|\.query_one(" api --include=*.py | grep -v "repository/\|core/db.py\|tests/"` must be empty (also enforced by `test_no_sql_outside_repository`). `mcp_gateway/server.py` no longer reads `agent_logs` itself: it calls `agent_job_service.get_job_logs`. See [`13-sql-server-migration.md`](13-sql-server-migration.md).
+
 # Architecture: routers → services → repository
 
 ## What we did

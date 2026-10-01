@@ -6,13 +6,15 @@ event stream for human review -- no assertion on which tool fired, what
 arguments it received, or the wording of the final output. The only
 functional check is that the run completes without raising.
 
-Requires RUN_E2E=1 plus real OPENAI_API_KEY/Supabase/Redis.
+Requires RUN_E2E=1 plus real OPENAI_API_KEY/SQL Server/Redis.
 """
 from __future__ import annotations
 
 import os
 
 import pytest
+
+from tests.e2e import e2e_db
 
 from conftest import register_org, run_planner
 
@@ -33,7 +35,7 @@ async def test_expense_recording_message_observed(client, db, cleanup, story):
     assert result is not None
     assert result.final_output is not None
 
-    rows = db.table("expenses").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+    rows = e2e_db.latest_rows(db, "expenses", org_id)
     if rows.data:
         cleanup.track_row("expenses", rows.data[0]["id"], org_id)
 
@@ -52,7 +54,7 @@ async def test_sale_recording_message_observed(client, db, cleanup, story):
     assert result is not None
     assert result.final_output is not None
 
-    rows = db.table("sales").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+    rows = e2e_db.latest_rows(db, "sales", org_id)
     if rows.data:
         cleanup.track_row("sales", rows.data[0]["id"], org_id)
 
@@ -78,6 +80,6 @@ async def test_missing_amount_message_observed(client, db, cleanup, story):
     )
 
     if "create_expense_record" in capture.tool_names():
-        rows = db.table("expenses").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+        rows = e2e_db.latest_rows(db, "expenses", org_id)
         if rows.data:
             cleanup.track_row("expenses", rows.data[0]["id"], org_id)

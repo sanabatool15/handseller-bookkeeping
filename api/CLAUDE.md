@@ -8,7 +8,7 @@ silently reintroducing bugs that were already found and fixed once.
 
 ## What this is
 
-Agentic bookkeeping backend for a handseller business: FastAPI + Supabase
+Agentic bookkeeping backend for a handseller business: FastAPI + Microsoft SQL Server (pyodbc)
 (Postgres) + Redis (idempotency) + Inngest (resilient background jobs) +
 FastMCP (MCP server over stdio) + the OpenAI Agents SDK with a deterministic
 offline fallback. Full architecture, schema, and setup instructions are in
@@ -31,8 +31,11 @@ Do not do this even under time pressure or when asked to "just make it work":
    - `routers/*.py`: HTTP only (parse request, call a service, return a
      response/HTTPException). No business logic, no `db.table(...)` calls.
    - `services/*.py`: validation + business logic + calling `repository/`.
-     Never imports `app.clients.get_supabase` or calls `.table(` directly.
-   - `repository/*.py`: the **only** place that talks to Supabase.
+     Never imports `core.clients`/`core.db` internals or calls `db.query/query_one/execute` directly
+     (the one exception: `health_service` uses `core.clients.db_session`, still only calling a repository).
+   - `repository/*.py`: the **only** place that talks to the database (SQL Server, T-SQL via `core.db.Db`).
+     *(Annotation, slice F0b: this used to say Supabase; Supabase is fully removed. Jobs/MCP outside FastAPI use
+     `core.clients.db_session()` / `run_in_db()`; routers use `routers.deps.get_db`.)*
    Before adding a new feature, ask which layer it belongs to. If a router
    needs a new capability, add it to a service; if a service needs new data
    access, add it to a repository — don't take a shortcut "just this once."
@@ -111,7 +114,8 @@ commands, and why: `specs/11-package-name-collisions.md`.
   through a service, (c) have its repository calls scoped by `id`+`org_id`
   if it touches an existing record, (d) return 404 (not 403) for
   cross-tenant access, (e) get a unit test (service, mocked repo) and an
-  integration test (`TestClient`, `tests/fakes.py`).
+  integration test (`TestClient`, in-memory fakes in `tests/fake_repos.py` — add fakes for any new repo function;
+  they must enforce `id`+`org_id` scoping like the SQL, and `test_repository_sql_rules.py` must keep passing).
 - **CORS is currently `allow_origins=["*"]`** in `core/fastapi_app.py` — this is
   flagged in the README's Production Readiness Review as dev-only. Lock this
   down to real origins before any actual production deployment; don't leave
@@ -136,6 +140,13 @@ gotcha are in `specs/12-vercel-deployment.md`. Read that file before
 touching `api/index.py`, `vercel.json`, or anything about how this backend
 is entrypointed.
 
+## SQL Server rules (slice F0b)
+
+See `specs/13-sql-server-migration.md`: tables with AFTER UPDATE triggers need `OUTPUT cols INTO @table; SELECT * FROM @table`
+(never bare `OUTPUT INSERTED.*`); month totals/breakdowns are `SUM ... GROUP BY` over a date range in SQL; JSON columns are
+nvarchar(max) (serialised in the repository); `get_ownership` takes only allow-listed table names. T-SQL here is unrun until
+verified with `sql_server/TEST_CASES.md` / `RUN_MSSQL=1`.
+
 ## Running things
 
 See `README.md` for full instructions. Quick reference (run from `api/`):
@@ -145,11 +156,14 @@ See `README.md` for full instructions. Quick reference (run from `api/`):
 pip install -r requirements.txt -r requirements-dev.txt
 pytest tests/unit tests/integration -v
 
-# e2e (needs docker compose up + real Supabase with sql/schema.sql applied)
+# SQL Server tests (needs sql_server/01 + 02 scripts applied and MSSQL_* set)
+RUN_MSSQL=1 pytest tests/sqlserver -v
+
+# e2e (needs Redis/Inngest + real SQL Server; not yet run against SQL Server, see specs/17)
 RUN_E2E=1 pytest tests/e2e -v
 
 # run the app standalone (unprefixed routes, e.g. for docker-compose/Inngest dev)
-cp .env.example .env   # fill in real Supabase/Redis/OpenAI/Inngest values
+cp .env.example .env   # fill in real MSSQL_*/Redis/OpenAI/Inngest values
 docker compose up --build
 # or: uvicorn core.fastapi_app:app --reload
 

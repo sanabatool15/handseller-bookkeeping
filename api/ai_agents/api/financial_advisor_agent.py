@@ -23,7 +23,7 @@ from typing import Any, Literal
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
-from supabase import Client
+from core.db import Db
 
 from ai_agents.prompt_loader import load_prompt
 from ai_agents.tools.bookkeeping_tools import build_investigate_tools, build_record_tools
@@ -92,7 +92,7 @@ def _model_for(name: str):
     )
 
 
-def build_agents(db: Client, *, org_id: str, user_id: str):
+def build_agents(db: Db, *, org_id: str, user_id: str):
     """Builds the planner + two specialists, fresh per run, with tools
     closed over this run's org_id/user_id so the LLM can never supply (or
     be tricked into supplying) a different org's identity."""
@@ -124,7 +124,7 @@ def build_agents(db: Client, *, org_id: str, user_id: str):
 
 
 async def run_bookkeeping_agent(
-    db: Client,
+    db: Db,
     *,
     org_id: str,
     user_id: str,
@@ -184,7 +184,7 @@ async def run_bookkeeping_agent(
     }
 
 
-async def run_financial_advisor(db: Client, monthly_summary: dict[str, Any]) -> str:
+async def run_financial_advisor(db: Db, monthly_summary: dict[str, Any]) -> str:
     """Backward-compatible entry point used by the proactive monthly-advice
     job: synthesizes an investigation request from the monthly summary
     (routing it to `investigate_agent` via the planner, same as any other
@@ -192,8 +192,8 @@ async def run_financial_advisor(db: Client, monthly_summary: dict[str, Any]) -> 
     a plain string, same shape the caller expects.
 
     `db` must be supplied by the caller (the job already holds one from the
-    job context/token-derived org_id) — this module never obtains its own
-    Supabase client, per the routers -> services -> repository layering.
+    job context/token-derived org_id) — this module never opens its own
+    SQL Server connection, per the routers -> services -> repository layering.
 
     Raises AgentUnavailableError on any failure so the caller falls back to
     `ai_agents/rules/fallback_engine.py`.

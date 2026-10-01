@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Response
 from pydantic import BaseModel
-from supabase import Client
+from core.db import Db
 
 from core.security import CurrentUser
 from routers.deps import get_current_user, get_db
@@ -26,7 +26,7 @@ async def request_financial_advice(
     response: Response,
     body: FinancialAdviceRequest = Body(default_factory=FinancialAdviceRequest),
     user: CurrentUser = Depends(get_current_user),
-    db: Client = Depends(get_db),
+    db: Db = Depends(get_db),
 ):
     job = await agent_job_service.trigger_financial_advice_job(
         db, org_id=user.org_id, user_id=user.user_id, question=body.question
@@ -35,7 +35,7 @@ async def request_financial_advice(
 
 
 @router.get("/{job_id}")
-def get_job_status(job_id: str, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_db)):
+def get_job_status(job_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     job = agent_job_service.get_job_status(db, org_id=user.org_id, job_id=job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")

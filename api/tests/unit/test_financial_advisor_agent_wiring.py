@@ -2,7 +2,7 @@
 
 Scope: this file ONLY tests ai_agents/api/financial_advisor_agent.py --
 how it builds the Agent/Model objects and calls Runner.run_streamed. It does
-not touch jobs/financial_agent_job.py (Inngest orchestration), Supabase, or
+not touch jobs/financial_agent_job.py (Inngest orchestration), the database, or
 Redis -- those have their own separate test files.
 
 Unlike test_financial_advisor_agent.py (which is deliberately
@@ -32,7 +32,7 @@ SUMMARY = {"org_id": "org-1", "total_sales": 10.0, "total_expenses": 5.0, "net_p
 
 
 class _FakeDb:
-    """Minimal stand-in for a Supabase client; these tests mock the SDK
+    """Minimal stand-in for a database handle; these tests mock the SDK
     layer above it and never touch it directly."""
 
 

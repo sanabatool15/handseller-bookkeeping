@@ -1,5 +1,7 @@
 # Testing Strategy
 
+> **Annotation (slice F0b):** `tests/fakes.py` / `FakeSupabase` and `set_supabase` no longer exist. Unit + integration tests use in-memory fake *repositories* (`tests/fake_repos.py`, patched per module by an autouse fixture in `tests/conftest.py`; they enforce id+org_id scoping), `core.clients.set_db_factory` hands out a `FakeSqlDb`, and `tests/unit/test_repository_sql_shapes.py` runs the real repositories against a recording Db. Real-DB tests live in `tests/sqlserver/` (`RUN_MSSQL=1`). The e2e suites use `tests/e2e/e2e_db.py` for setup/cleanup SQL. The Supabase/Postgres wording below is historical. See [`13-sql-server-migration.md`](13-sql-server-migration.md).
+
 ## New direction: real dependencies instead of fakes
 
 The plan going forward is to test against **real infrastructure** — a real

@@ -1,10 +1,10 @@
 """Shared fixtures for the prompt-3 real-infra e2e suite.
 
-Same real-infra approach as `tests/e2e/prompt-2/`: `app.clients.get_supabase()`
+Same real-infra approach as `tests/e2e/prompt-2/`: `core.clients.get_db_connection()`
 and `app.clients.get_redis()` are re-pointed (via a same-named `_wire_fakes`
 override, shadowing the repo-root autouse fixture of that name) at real
-`supabase.Client` / `redis.asyncio` clients built straight from `.env`. No
-FakeSupabase, no fakeredis, no in-process job simulation anywhere in this
+SQL Server / `redis.asyncio` clients built straight from `.env`. No
+no in-memory fakes, no fakeredis, no in-process job simulation anywhere in this
 directory.
 
 What prompt-3 adds on top of prompt-2 (see PROMPT_V3.md for the full
@@ -42,10 +42,10 @@ from fastapi.testclient import TestClient
 
 os.environ.setdefault("APP_ENV", "test")
 
-from core.clients import get_redis, get_supabase, set_redis, set_supabase  # noqa: E402
+from core.clients import get_redis, set_db_factory, set_redis  # noqa: E402
 from core.fastapi_app import app  # noqa: E402
 from core.config import get_settings  # noqa: E402
-from supabase import create_client  # noqa: E402
+from tests.e2e import e2e_db  # noqa: E402
 import redis.asyncio as aioredis  # noqa: E402
 
 
@@ -139,15 +139,21 @@ def expect(condition: bool, *, request_desc: str, response, message: str) -> Non
 # ---------------------------------------------------------------------------
 # Real-infra client wiring (same shadowing trick as prompt-2's conftest.py,
 # needed because tests/conftest.py's autouse `_wire_fakes` would otherwise
-# silently inject FakeSupabase/fakeredis into every test under `tests/`).
+# silently inject in-memory fakes/fakeredis into every test under `tests/`).
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
 def _wire_fakes():
     settings = get_settings()
-    set_supabase(create_client(settings.supabase_url, settings.supabase_service_key))
     set_redis(aioredis.from_url(settings.redis_url, decode_responses=True))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _wire_sql_fakes():
+    """Shadows tests/conftest.py's autouse fixture of the same name: real SQL Server, real repositories."""
+    set_db_factory(None)
     yield
 
 
@@ -159,7 +165,10 @@ def client():
 
 @pytest.fixture
 def db():
-    return get_supabase()
+    conn = e2e_db.connect()
+    yield conn
+    conn.rollback()
+    conn.close()
 
 
 @pytest.fixture
@@ -193,10 +202,7 @@ class Cleanup:
         for table, record_id, org_id, record in reversed(self._rows):
             self._story.say(f"tearing down {table}:{record_id} -- logging record before delete: {record}")
             try:
-                q = self._db.table(table).delete().eq("id", record_id)
-                if org_id is not None and table != "orgs":
-                    q = q.eq("org_id", org_id)
-                q.execute()
+                e2e_db.delete_tracked(self._db, table, record_id, org_id)
                 self._story.say(f"deleted {table}:{record_id}")
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"cleanup failed for {table}:{record_id}: {exc!r}")

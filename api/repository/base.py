@@ -1,16 +1,16 @@
-"""Shared repository helpers.
+"""Shared repository helpers (SQL Server / T-SQL via core.db.Db).
 
 CRITICAL invariant enforced across this whole layer: every read/update/delete
-on a tenant-scoped table filters by BOTH `id` and `org_id` in the same query,
-so a caller can never "check ownership then fetch by id alone" (the classic
-IDOR / check-then-fetch vulnerability). There is no code path in this
-codebase that fetches a record by id without also constraining org_id.
+on a tenant-scoped table filters by BOTH `id` and `org_id` in the same SQL
+statement, so a caller can never "check ownership then fetch by id alone" (the
+classic IDOR / check-then-fetch vulnerability). `tests/unit/test_repository_sql_rules.py`
+enforces this statically for every statement in `repository/*.py`.
 """
 from __future__ import annotations
 
+import datetime as dt
+import json
 from typing import Any, Optional
-
-from supabase import Client
 
 from core.db import Db, UniqueViolationError, transaction  # noqa: F401  (re-exported for services)
 
@@ -19,27 +19,11 @@ DuplicateRecordError = UniqueViolationError
 
 
 class RepositoryError(Exception):
-    """Raised when a Supabase operation fails or returns unexpected shape."""
+    """Raised when a repository call is misused or returns an unexpected shape."""
 
 
-def unwrap_single(rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
-    return rows[0] if rows else None
-
-
-def get_ownership(db: Client, *, table: str, record_id: str, org_id: str) -> bool:
-    """Generic ownership check: does `table` contain a row with this id scoped to this org?
-
-    Used by services before performing side-effecting operations that don't
-    themselves return rows (e.g. before enqueuing a background job tied to a
-    record), and directly satisfies the `get_ownership(user_id, org_id)`-style
-    check required by the spec (here parameterized as record_id/org_id/table,
-    since ownership in this schema is expressed as org membership).
-    """
-    resp = db.table(table).select("id").eq("id", record_id).eq("org_id", org_id).limit(1).execute()
-    return bool(resp.data)
-
-
-# SQL Server variant. Table names are NEVER interpolated: each allowed table has its own literal SQL.
+# Table names are NEVER interpolated into SQL: each allowed table has its own literal statement,
+# and anything not in this allow-list is rejected before any SQL is built.
 _OWNERSHIP_SQL = {
     "users": "SELECT 1 AS ok FROM users WHERE id = ? AND org_id = ?",
     "sales": "SELECT 1 AS ok FROM sales WHERE id = ? AND org_id = ?",
@@ -48,10 +32,41 @@ _OWNERSHIP_SQL = {
 }
 
 
-def get_ownership_sql(db: Db, *, table: str, record_id: str, org_id: str) -> bool:
-    """SQL Server ownership check: id AND org_id in the same statement."""
+def get_ownership(db: Db, *, table: str, record_id: str, org_id: str) -> bool:
+    """Does `table` contain a row with this id that belongs to this org? (id AND org_id, one statement.)
+
+    `table` must be one of the allow-listed tenant tables; any other value raises RepositoryError.
+    """
     try:
         sql = _OWNERSHIP_SQL[table]
-    except KeyError as exc:
+    except (KeyError, TypeError) as exc:
         raise RepositoryError(f"ownership check not supported for table {table!r}") from exc
     return db.query_one(sql, (record_id, org_id)) is not None
+
+
+def month_range(year: int, month: int) -> tuple[dt.date, dt.date]:
+    """[first day of month, first day of next month) for a half-open SQL date range."""
+    start = dt.date(year, month, 1)
+    end = dt.date(year + 1, 1, 1) if month == 12 else dt.date(year, month + 1, 1)
+    return start, end
+
+
+def today_utc() -> dt.date:
+    return dt.datetime.now(dt.timezone.utc).date()
+
+
+def to_json(value: Any) -> Optional[str]:
+    """Serialise a dict for an nvarchar(max) JSON column (None stays NULL)."""
+    return None if value is None else json.dumps(value, default=str)
+
+
+def from_json(value: Any) -> Any:
+    """Parse an nvarchar(max) JSON column back into Python (NULL stays None)."""
+    if value is None or not isinstance(value, str):
+        return value
+    return json.loads(value)
+
+
+def clamp_page(limit: int, offset: int) -> tuple[int, int]:
+    """OFFSET must be >= 0 and FETCH NEXT must be >= 1 in T-SQL."""
+    return max(1, int(limit)), max(0, int(offset))

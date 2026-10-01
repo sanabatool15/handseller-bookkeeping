@@ -1,10 +1,10 @@
 """End-to-end test of the full financial-advisor workflow against a REAL
-Inngest Dev Server + real (or local) Supabase/Postgres + real Redis.
+Inngest Dev Server + real (or local) SQL Server + real Redis.
 
 This is intentionally NOT runnable in CI/sandbox environments without live
 infrastructure: it requires `docker compose up` (see docker-compose.yml) to
 have Redis, the Inngest dev server, and the FastAPI app all running, plus a
-reachable Supabase/Postgres instance with `sql/schema.sql` applied.
+reachable SQL Server with sql_server/*.sql applied.
 
 Per the task's own guidance ("tests/e2e can be best-effort/skippable if it
 genuinely requires live Inngest/Docker infra"), this whole module is skipped
@@ -20,7 +20,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_E2E") != "1",
-    reason="Requires live docker-compose stack (FastAPI + Redis + Inngest dev server + Supabase). Set RUN_E2E=1 to run.",
+    reason="Requires live docker-compose stack (FastAPI + Redis + Inngest dev server + SQL Server). Set RUN_E2E=1 to run.",
 )
 
 BASE_URL = os.environ.get("E2E_BASE_URL", "http://localhost:8000")

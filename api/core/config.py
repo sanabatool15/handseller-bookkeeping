@@ -17,11 +17,6 @@ class Settings(BaseSettings):
     mssql_driver: str = "ODBC Driver 18 for SQL Server"
     mssql_trust_server_certificate: bool = True
 
-    # Supabase (legacy: still used by sales/expenses/agent routes until later migration slices)
-    supabase_url: str = "https://example.supabase.co"
-    supabase_service_key: str = "test-service-key"
-    supabase_anon_key: str = "test-anon-key"
-
     # Auth
     jwt_secret: str = "change-me-super-secret-please-use-a-real-32-byte-value"
     jwt_algorithm: str = "HS256"

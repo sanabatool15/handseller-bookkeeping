@@ -1,4 +1,4 @@
-"""Scenario 5: auth and input-validation edge cases, against real Supabase.
+"""Scenario 5: auth and input-validation edge cases, against real SQL Server.
 
 Real-infra e2e: registering the same email twice must hit the real `users`
 table's uniqueness check (409); wrong password on login is rejected (401);

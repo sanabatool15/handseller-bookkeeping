@@ -1,4 +1,4 @@
-> **Migration note:** the database is moving from Supabase/Postgres to SQL Server, slice by slice. `orgs` and `users` are already ported (`../sql_server/01_foundation.sql`); the Postgres DDL below stays accurate for the other tables until they are migrated. See [`13-sql-server-migration.md`](13-sql-server-migration.md).
+> **Migration note (updated, slice F0b):** the database has moved from Supabase/Postgres to SQL Server. All tables are ported: `orgs`/`users` in `../sql_server/01_foundation.sql`, `sales`/`expenses`/`agent_jobs`/`agent_logs` in `../sql_server/02_sales_expenses_agents.sql`. The Postgres DDL, RLS policies, `supabase db push` and service-role-key text below describe the OLD system and are kept only as history (`api/sql/schema.sql` is no longer applied). Differences in the T-SQL port: no RLS; JSON columns are `nvarchar(max)` + `CHECK (ISJSON(...) = 1)`; `agent_logs` gained an `org_id` column with a composite FK `(job_id, org_id)` to `agent_jobs`; `agent_jobs.status` has a CHECK; no `ON DELETE CASCADE` except `agent_logs -> agent_jobs`. See [`13-sql-server-migration.md`](13-sql-server-migration.md).
 
 # Database Schema
 

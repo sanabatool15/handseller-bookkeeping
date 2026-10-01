@@ -5,7 +5,7 @@ real expenses, and a real agent_jobs row. Asserts org B gets 404 (never 403
 or 200) reading/updating/deleting org A's records by exact id, and that
 list endpoints never leak the other org's rows. Directly exercises the
 `id`+`org_id` double-scoping rule in CLAUDE.md / specs/03-multi-tenancy-security.md
-against the real Postgres RLS/repository layer, not FakeSupabase.
+against the real SQL Server repository layer, not the in-memory fakes.
 """
 from __future__ import annotations
 

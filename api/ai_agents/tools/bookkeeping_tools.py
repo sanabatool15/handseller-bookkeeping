@@ -16,7 +16,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from supabase import Client
+from core.db import Db
 
 from services import expenses_service, financial_report_service, sales_service
 from ai_agents.tools.deep_link import build_deep_link
@@ -33,7 +33,7 @@ def _current_year_month() -> tuple[int, int]:
     return now.year, now.month
 
 
-def build_investigate_tools(db: Client, *, org_id: str) -> list[Any]:
+def build_investigate_tools(db: Db, *, org_id: str) -> list[Any]:
     """Tools scoped to `investigate_agent`: read-only summary/breakdown
     queries plus web_search. No record-mutating tool is ever included here.
     """
@@ -77,7 +77,7 @@ def build_investigate_tools(db: Client, *, org_id: str) -> list[Any]:
     ]
 
 
-def build_record_tools(db: Client, *, org_id: str, user_id: str) -> list[Any]:
+def build_record_tools(db: Db, *, org_id: str, user_id: str) -> list[Any]:
     """Tools scoped to `record_agent`: create-expense/create-sale plus the
     deep-link builder used to hand the user a reference. No read/investigate
     tool is ever included here.

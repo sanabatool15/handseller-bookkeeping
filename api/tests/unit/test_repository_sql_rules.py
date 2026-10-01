@@ -49,6 +49,23 @@ def _sql_nodes(path):
                 consts[node.targets[0].id] = val
                 if SQL_START.match(val):
                     yield node.lineno, val, node
+    # SQL that is not a plain module-level constant: string literals inside dicts/functions, and
+    # "a" + "b" concatenations built inside functions. (Pieces of a concatenation are not checked on
+    # their own, only the joined statement; docstrings/bare expression statements are skipped.)
+    skip: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr):
+            skip.add(id(node.value))
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            for child in (node.left, node.right):
+                skip.add(id(child))
+    for node in ast.walk(tree):
+        if id(node) in skip:
+            continue
+        if isinstance(node, (ast.Constant, ast.BinOp)):
+            val = resolve(node)
+            if isinstance(val, str) and SQL_START.match(val):
+                yield node.lineno, val, node
     for node in ast.walk(tree):
         if isinstance(node, ast.JoinedStr):
             yield node.lineno, None, node  # f-string
@@ -117,6 +134,20 @@ def test_by_id_statements_include_org_id():
                 if not re.search(r"\borg_id\b", stmt, re.I):
                     bad.append(f"{p.name}:{lineno}")
     assert not bad, bad
+
+
+def test_guard_sees_sql_in_dicts_and_new_repositories():
+    """The guard must cover the F0b repositories and dict-held SQL (base._OWNERSHIP_SQL)."""
+    seen = {p.name for p, _, sql, _ in _all() if sql}
+    assert {"sales_repository.py", "expenses_repository.py", "agent_jobs_repository.py", "base.py"} <= seen
+    base_sql = [sql for p, _, sql, _ in _all() if p.name == "base.py" and sql]
+    assert any("FROM sales WHERE id = ? AND org_id = ?" in q for q in base_sql)
+
+
+def test_every_tenant_table_has_a_repository_statement_with_org_id():
+    text = " ".join(sql for _, _, sql, _ in _all() if sql)
+    for table in ("sales", "expenses", "agent_jobs", "agent_logs"):
+        assert re.search(rf"\b{table}\b[^;]*\borg_id\b", text, re.I), table
 
 
 def test_guard_detects_violations():

@@ -49,7 +49,7 @@ run as root.
 (Kubernetes readiness/liveness probes, if this is ever deployed there) need
 a real signal for "is this container actually serving traffic," not just
 "did the process start." `/health` (see `04-idempotency-redis.md` and
-`app/main.py`) independently checks both Redis and Supabase connectivity,
+`app/main.py`) independently checks both Redis and database connectivity (SQL Server since slice F0b; `checks.database`, previously `checks.supabase`),
 so a container that's up but can't reach its dependencies is correctly
 reported unhealthy rather than falsely "running."
 

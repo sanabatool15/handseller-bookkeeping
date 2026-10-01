@@ -1,7 +1,7 @@
 """FastAPI application entrypoint.
 
-Wires: routers, auth + idempotency middleware, CORS, lifespan (Supabase +
-Redis client setup/teardown), and mounts the Inngest FastAPI handler.
+Wires: routers, auth + idempotency middleware, CORS, lifespan (SQL Server
+reachability probe + Redis client setup/teardown), and mounts the Inngest FastAPI handler.
 """
 from __future__ import annotations
 
@@ -9,16 +9,18 @@ import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core.clients import close_clients, get_redis, get_supabase
+from core.clients import close_clients, get_redis
 from core.config import get_settings
 from middleware.auth import AuthMiddleware
 from middleware.idempotency import IdempotencyMiddleware
 from routers import agent_jobs_router, auth_router, expenses_router, sales_router
+from services import health_service
 
 logging.basicConfig(level=get_settings().log_level)
 logger = logging.getLogger("handseller.app")
@@ -26,8 +28,13 @@ logger = logging.getLogger("handseller.app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Eagerly initialize clients so a bad config fails fast at startup.
-    get_supabase()
+    # Probe SQL Server once so a bad connection string is visible in the startup log at once
+    # (not fatal: like Redis, the DB may come up later and each request opens its own connection).
+    db_status = await run_in_threadpool(health_service.check_database)
+    if db_status == "ok":
+        logger.info("SQL Server connection OK")
+    else:
+        logger.warning("SQL Server not reachable at startup (%s) - requests will fail until it is", db_status)
     redis = get_redis()
     try:
         await redis.ping()
@@ -84,17 +91,13 @@ def root():
 
 @app.get("/health")
 async def health():
-    checks = {"redis": "unknown", "supabase": "unknown"}
+    checks = {"redis": "unknown", "database": "unknown"}
     try:
         await get_redis().ping()
         checks["redis"] = "ok"
     except Exception as exc:  # noqa: BLE001
         checks["redis"] = f"error: {exc}"
-    try:
-        get_supabase()
-        checks["supabase"] = "ok"
-    except Exception as exc:  # noqa: BLE001
-        checks["supabase"] = f"error: {exc}"
+    checks["database"] = await run_in_threadpool(health_service.check_database)
     return {"status": "ok", "checks": checks}
 
 

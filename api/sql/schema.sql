@@ -1,3 +1,5 @@
+-- LEGACY (replaced in slices F0a/F0b): this is the old Supabase/Postgres schema, kept for reference only.
+-- The live schema is ../sql_server/01_foundation.sql and ../sql_server/02_sales_expenses_agents.sql (T-SQL).
 -- Handseller Bookkeeping: Supabase (PostgreSQL) schema
 -- Apply via the Supabase SQL editor or `supabase db push`.
 

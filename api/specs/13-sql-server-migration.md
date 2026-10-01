@@ -9,16 +9,17 @@ steps live in `sql_server/TEST_CASES.md`.
 
 ## It is sliced
 Each slice ports one area end to end (SQL script + repository + service + router + tests).
-Until the last slice lands, **two data paths coexist**:
+**Status: F0a (foundation + auth) and F0b (everything else + Supabase removal) are done; there is
+a single data path now** (`routers/deps.py::get_db`, SQL Server, per request, commit/rollback).
 
-| Dependency | Backend | Used by |
-|---|---|---|
-| `routers/deps.py::get_sql_db` | SQL Server (`core.db.Db`, per-request, commit/rollback) | auth (slice F0a) |
-| `routers/deps.py::get_db` | Supabase client (legacy, untouched) | sales, expenses, agent jobs, MCP, jobs |
+| Where | How it gets a connection |
+|---|---|
+| FastAPI routers | `routers/deps.py::get_db` (renamed from `get_sql_db`; the Supabase `get_db` is deleted) |
+| Inngest job steps, MCP server, scripts | `core.clients.db_session()` (one connection + transaction, commit/rollback/close) or `run_in_db(fn)` (same, retried as a whole on deadlock 1205/1222) |
+| Startup + `GET /health` | `services/health_service.py::check_database` -> `repository/health_repository.py::ping` (`SELECT 1`) |
 
-When all slices are migrated, `get_db` (Supabase) is deleted and `get_sql_db` is renamed to
-`get_db`. `core/clients.py` likewise keeps `get_supabase/set_supabase` next to the new
-`get_db_connection/set_db_factory` until then. Settings: `MSSQL_*` in `core/config.py`.
+`core/clients.py` keeps `get_db_connection/set_db_factory` (test seam) and Redis; `get_supabase/set_supabase`, the
+`supabase` dependency and the `SUPABASE_*` settings are gone. Settings: `MSSQL_*` in `core/config.py`.
 
 ## How (conventions)
 * `core/db.py`: `Db` (one pyodbc connection, autocommit off: `query`, `query_one`, `execute`,
@@ -43,6 +44,28 @@ When all slices are migrated, `get_db` (Supabase) is deleted and `get_sql_db` is
   `users.email` is UNIQUE. No RLS (app-layer `org_id` is the primary control, `10-known-limitations.md` #5).
 * Registration runs in ONE transaction (user -> org -> `set_user_org`); a failure leaves no orphan rows;
   a duplicate email (pre-check or concurrent UNIQUE violation) is the existing 409 "Email already registered".
+
+## Slice F0b: sales, expenses, agent jobs/logs, jobs, MCP, agent tools
+* `sql_server/02_sales_expenses_agents.sql`: `sales`, `expenses`, `agent_jobs`, `agent_logs`, `idx_*_org_id`,
+  `idx_agent_logs_job_id`, updated_at triggers, `ISJSON` checks on json columns, `agent_jobs.status` CHECK, no RLS.
+  `agent_logs` now has `org_id` (every tenant statement must mention it; composite FK `(job_id, org_id)` ->
+  `agent_jobs(id, org_id)` ties a log to its job's org). No `UNIQUE (job_id, step_name)` (see specs/17 #10).
+* Repositories keep their function names/return shapes (`sales`/`expenses`/`agent_jobs`), with these deliberate
+  changes: `agent_jobs_repository.add_log` and `get_completed_steps` take `org_id`; new `list_logs_for_job`,
+  `list_sales_for_month`, `list_expenses_for_month`, `health_repository.ping`. `base.get_ownership` is now the SQL
+  version over an allow-list (`get_ownership_sql` removed).
+* Updates use one static statement with `COALESCE(?, column)` (the service strips `None`, so None never means
+  "set NULL"); unknown update keys raise `ValueError` before any SQL. Deletes use `rowcount`.
+* Month totals / category breakdowns are `SUM ... GROUP BY` over a half-open date range in SQL
+  (`base.month_range`), `COALESCE(SUM(..),0)` so an empty month is 0.0; the ledger CSV also filters by month in SQL
+  (it used to slice the newest 1000 rows in Python).
+* JSON columns (`input_payload`, `result`, `error_details`, `insights_generated`) are `json.dumps` on write and
+  `json.loads` on read in `agent_jobs_repository`, so the API still returns dicts.
+* `sale_date`/`expense_date` are set explicitly to UTC "today" (`base.today_utc`), consistent with the UTC month used by jobs/MCP.
+* `agent_job_service.trigger_financial_advice_job` commits the job row BEFORE sending the Inngest event.
+* Job steps: gather/finalize run through `run_in_db` (deadlock retry); the agent step holds one `db_session()` for
+  the run and rolls back before falling back to rule-based advice.
+* Static guard now also sees SQL held in dicts / built by `+` inside functions (so `base._OWNERSHIP_SQL` is checked).
 
 ## Caveat: T-SQL has not been executed
 No SQL Server was available while writing this. All T-SQL (DDL, triggers, repository statements,

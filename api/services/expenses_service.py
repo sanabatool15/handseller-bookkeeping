@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from supabase import Client
+from core.db import Db
 
 from repository import expenses_repository
 
@@ -16,7 +16,7 @@ class NotFoundError(Exception):
     pass
 
 
-def create_expense(db: Client, *, org_id: str, user_id: str, amount: float, category: str, voucher_reference: str | None = None, description: str | None = None) -> dict[str, Any]:
+def create_expense(db: Db, *, org_id: str, user_id: str, amount: float, category: str, voucher_reference: str | None = None, description: str | None = None) -> dict[str, Any]:
     if amount <= 0:
         raise ValidationError("Expense amount must be positive")
     return expenses_repository.create_expense(
@@ -25,18 +25,18 @@ def create_expense(db: Client, *, org_id: str, user_id: str, amount: float, cate
     )
 
 
-def list_expenses(db: Client, *, org_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+def list_expenses(db: Db, *, org_id: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     return expenses_repository.list_expenses(db, org_id=org_id, limit=limit, offset=offset)
 
 
-def get_expense(db: Client, *, org_id: str, expense_id: str) -> dict[str, Any]:
+def get_expense(db: Db, *, org_id: str, expense_id: str) -> dict[str, Any]:
     expense = expenses_repository.get_expense_scoped(db, expense_id=expense_id, org_id=org_id)
     if expense is None:
         raise NotFoundError("Expense not found")
     return expense
 
 
-def update_expense(db: Client, *, org_id: str, expense_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+def update_expense(db: Db, *, org_id: str, expense_id: str, updates: dict[str, Any]) -> dict[str, Any]:
     if "amount" in updates and updates["amount"] is not None and updates["amount"] <= 0:
         raise ValidationError("Expense amount must be positive")
     clean_updates = {k: v for k, v in updates.items() if v is not None}
@@ -46,7 +46,7 @@ def update_expense(db: Client, *, org_id: str, expense_id: str, updates: dict[st
     return updated
 
 
-def delete_expense(db: Client, *, org_id: str, expense_id: str) -> None:
+def delete_expense(db: Db, *, org_id: str, expense_id: str) -> None:
     deleted = expenses_repository.delete_expense_scoped(db, expense_id=expense_id, org_id=org_id)
     if not deleted:
         raise NotFoundError("Expense not found")

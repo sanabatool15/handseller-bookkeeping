@@ -7,13 +7,15 @@ they drive the real chain, print the full captured event stream, and leave
 correctness judgment to a human reading the `pytest -s` output.
 
 Requires RUN_E2E=1 (see conftest.py) plus a real OPENAI_API_KEY and real
-Supabase/Redis. Without it, this whole module is skipped.
+SQL Server/Redis. Without it, this whole module is skipped.
 """
 from __future__ import annotations
 
 import os
 
 import pytest
+
+from tests.e2e import e2e_db
 
 from conftest import register_org, run_planner
 
@@ -35,7 +37,7 @@ async def test_h1_expense_message_observed(client, db, cleanup, story):
     assert result.final_output is not None
 
     # Best-effort cleanup of whatever the agent may have created.
-    rows = db.table("expenses").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+    rows = e2e_db.latest_rows(db, "expenses", org_id)
     if rows.data:
         cleanup.track_row("expenses", rows.data[0]["id"], org_id)
 
@@ -54,7 +56,7 @@ async def test_h2_sale_message_observed(client, db, cleanup, story):
     assert result is not None
     assert result.final_output is not None
 
-    rows = db.table("sales").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+    rows = e2e_db.latest_rows(db, "sales", org_id)
     if rows.data:
         cleanup.track_row("sales", rows.data[0]["id"], org_id)
 
@@ -81,6 +83,6 @@ async def test_e1_ambiguous_transaction_and_question_observed(client, db, cleanu
     )
 
     if "create_expense_record" in capture.tool_names():
-        rows = db.table("expenses").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+        rows = e2e_db.latest_rows(db, "expenses", org_id)
         if rows.data:
             cleanup.track_row("expenses", rows.data[0]["id"], org_id)

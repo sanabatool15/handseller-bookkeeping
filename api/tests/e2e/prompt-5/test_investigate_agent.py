@@ -3,12 +3,12 @@ get_expense_breakdown_by_category, get_sales_breakdown_by_category,
 web_search). See agent_scenarios.md.
 
 Historical sales/expenses the investigator needs are seeded DIRECTLY via
-the Supabase client in test setup (not through the HTTP API), per this
+SQL in test setup (tests/e2e/e2e_db.py) (not through the HTTP API), per this
 suite's setup convention. Drives the real chain and prints the captured
 event stream for human review -- no assertion on which tool fired, its
 arguments, or the wording/content of the final output.
 
-Requires RUN_E2E=1 plus real OPENAI_API_KEY/Supabase/Redis.
+Requires RUN_E2E=1 plus real OPENAI_API_KEY/SQL Server/Redis.
 """
 from __future__ import annotations
 
@@ -18,14 +18,16 @@ import uuid
 
 import pytest
 
+from tests.e2e import e2e_db
+
 from conftest import register_org, run_planner
 
 RUN_E2E = os.environ.get("RUN_E2E") == "1"
 
 
 def _seed_history(db, *, org_id: str, user_id: str, cleanup, story):
-    """Seeds a sale and a couple of expenses directly via the Supabase
-    client (not the HTTP API) so investigate_agent's summary/breakdown
+    """Seeds a sale and a couple of expenses directly via SQL
+    (not the HTTP API) so investigate_agent's summary/breakdown
     tools have real data to pull from this month."""
     now = dt.datetime.utcnow().isoformat()
 
@@ -38,7 +40,7 @@ def _seed_history(db, *, org_id: str, user_id: str, cleanup, story):
         "description": "seed sale for investigate-agent observation",
         "created_at": now,
     }
-    db.table("sales").insert(sale_row).execute()
+    e2e_db.insert_ledger_row(db, "sales", sale_row)
     cleanup.track_row("sales", sale_row["id"], org_id)
     story.record("seeded sale", sale_row)
 
@@ -51,7 +53,7 @@ def _seed_history(db, *, org_id: str, user_id: str, cleanup, story):
         "description": "seed expense for investigate-agent observation",
         "created_at": now,
     }
-    db.table("expenses").insert(expense_row).execute()
+    e2e_db.insert_ledger_row(db, "expenses", expense_row)
     cleanup.track_row("expenses", expense_row["id"], org_id)
     story.record("seeded expense", expense_row)
 

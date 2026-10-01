@@ -1,4 +1,4 @@
-"""Run the financial-advisor agent directly, with no Docker/Inngest/Supabase.
+"""Run the financial-advisor agent directly, with no Docker/Inngest.
 
 This exercises exactly the same call jobs/financial_agent_job.py makes
 (ai_agents.api.financial_advisor_agent.run_financial_advisor), against a
@@ -51,9 +51,8 @@ async def main() -> None:
     # module-level client setup in financial_advisor_agent.py sees the
     # same env vars a real docker compose run would.
     from ai_agents.api.financial_advisor_agent import AgentUnavailableError, run_financial_advisor
-    from core.clients import get_supabase
+    from core.clients import db_session
 
-    db = get_supabase()
     sample_summary = {
         "total_sales": 4250.00,
         "total_expenses": 1830.50,
@@ -66,7 +65,8 @@ async def main() -> None:
 
     started = time.monotonic()
     try:
-        advice = await run_financial_advisor(db, sample_summary)
+        with db_session() as db:  # SQL Server connection (MSSQL_* in .env); the agent's tools read/write through it
+            advice = await run_financial_advisor(db, sample_summary)
     except AgentUnavailableError as exc:
         elapsed = time.monotonic() - started
         print(f"RESULT: AgentUnavailableError after {elapsed:.1f}s")

@@ -1,7 +1,7 @@
 """Shared fixtures for the prompt-4 planner-routing e2e suite.
 
 Follows the same real-infra pattern as `tests/e2e/prompt-3/conftest.py`
-(re-point `app.clients.get_supabase()`/`get_redis()` at real clients built
+(re-point `app.clients.get_db_connection()`/`get_redis()` at real clients built
 from `.env`, shadowing the repo-root autouse `_wire_fakes`), plus a `story`
 narrator and an `expect()` self-explaining assertion helper, reused
 verbatim in spirit.
@@ -16,7 +16,7 @@ when an assertion raises mid-test.
 Everything in this directory is gated behind `RUN_E2E=1`, same convention
 as `tests/e2e/test_full_inngest_workflow.py`, because it requires a real
 `OPENAI_API_KEY` (to actually drive `Runner.run_streamed()` against a live
-model) plus real Supabase/Redis. Without RUN_E2E=1 the whole module is
+model) plus real SQL Server/Redis. Without RUN_E2E=1 the whole module is
 skipped, not faked -- these tests are written to prove real planner
 routing behavior, not to pass against a mock.
 """
@@ -36,7 +36,7 @@ RUN_E2E = os.environ.get("RUN_E2E") == "1"
 
 pytestmark = pytest.mark.skipif(
     not RUN_E2E,
-    reason="Requires RUN_E2E=1 plus real Supabase/Redis/OPENAI_API_KEY to drive Runner.run_streamed() live. "
+    reason="Requires RUN_E2E=1 plus real SQL Server/Redis/OPENAI_API_KEY to drive Runner.run_streamed() live. "
     "Set RUN_E2E=1 (and fill in .env) to run this suite for real.",
 )
 
@@ -121,14 +121,23 @@ def _wire_fakes():
         yield
         return
 
-    from core.clients import set_redis, set_supabase
+    from core.clients import set_db_factory, set_redis
     from core.config import get_settings
-    from supabase import create_client
     import redis.asyncio as aioredis
 
     settings = get_settings()
-    set_supabase(create_client(settings.supabase_url, settings.supabase_service_key))
+    set_db_factory(None)
     set_redis(aioredis.from_url(settings.redis_url, decode_responses=True))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _wire_sql_fakes():
+    """Shadows tests/conftest.py's autouse fixture of the same name: with RUN_E2E=1 the real
+    repositories talk to real SQL Server (without it the module is skipped anyway)."""
+    from core.clients import set_db_factory
+
+    set_db_factory(None)
     yield
 
 
@@ -143,9 +152,12 @@ def client():
 
 @pytest.fixture
 def db():
-    from core.clients import get_supabase
+    from tests.e2e import e2e_db
 
-    return get_supabase()
+    conn = e2e_db.connect()
+    yield conn
+    conn.rollback()
+    conn.close()
 
 
 class Cleanup:
@@ -174,10 +186,9 @@ class Cleanup:
         for table, record_id, org_id, record in reversed(self._rows):
             self._story.say(f"tearing down {table}:{record_id} -- {record}")
             try:
-                q = self._db.table(table).delete().eq("id", record_id)
-                if org_id is not None and table != "orgs":
-                    q = q.eq("org_id", org_id)
-                q.execute()
+                from tests.e2e import e2e_db
+
+                e2e_db.delete_tracked(self._db, table, record_id, org_id)
                 self._story.say(f"deleted {table}:{record_id}")
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"cleanup failed for {table}:{record_id}: {exc!r}")

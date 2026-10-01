@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from supabase import Client
+from core.db import Db
 
 from core.security import CurrentUser
 from routers.deps import get_current_user, get_db
@@ -26,7 +26,7 @@ class SaleUpdate(BaseModel):
 
 
 @router.post("", status_code=201)
-def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_db)):
+def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
         return sales_service.create_sale(
             db, org_id=user.org_id, user_id=user.user_id, amount=payload.amount,
@@ -37,12 +37,12 @@ def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_use
 
 
 @router.get("")
-def list_sales(limit: int = 100, offset: int = 0, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_db)):
+def list_sales(limit: int = 100, offset: int = 0, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     return sales_service.list_sales(db, org_id=user.org_id, limit=limit, offset=offset)
 
 
 @router.get("/{sale_id}")
-def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_db)):
+def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
         return sales_service.get_sale(db, org_id=user.org_id, sale_id=sale_id)
     except sales_service.NotFoundError as exc:
@@ -50,7 +50,7 @@ def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Cl
 
 
 @router.put("/{sale_id}")
-def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_db)):
+def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
         return sales_service.update_sale(db, org_id=user.org_id, sale_id=sale_id, updates=payload.model_dump())
     except sales_service.NotFoundError as exc:
@@ -60,7 +60,7 @@ def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(g
 
 
 @router.delete("/{sale_id}", status_code=204)
-def delete_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Client = Depends(get_db)):
+def delete_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
         sales_service.delete_sale(db, org_id=user.org_id, sale_id=sale_id)
     except sales_service.NotFoundError as exc:

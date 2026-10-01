@@ -1,20 +1,21 @@
-"""Singleton clients for Supabase and Redis, created once at app startup.
+"""Client factories: SQL Server connections (`get_db_connection`) and the Redis singleton.
 
 These are intentionally thin factory functions rather than module-level
-globals so tests can monkeypatch / inject fakes (fakeredis, mocked Supabase
-client) without touching import machinery.
+globals so tests can inject fakes (`set_db_factory`, fakeredis) without
+touching import machinery.
 """
 from __future__ import annotations
 
-from typing import Callable, Optional
+from contextlib import contextmanager
+from typing import Callable, Iterator, Optional, TypeVar
 
 import redis.asyncio as aioredis
-from supabase import Client, create_client
 
 from core.config import build_mssql_connection_string, get_settings
-from core.db import Db, connect
+from core.db import Db, connect, run_with_deadlock_retry, transaction
 
-_supabase_client: Optional[Client] = None
+T = TypeVar("T")
+
 _redis_client: Optional[aioredis.Redis] = None
 _db_factory: Optional[Callable[[], Db]] = None
 
@@ -32,18 +33,28 @@ def set_db_factory(factory: Optional[Callable[[], Db]]) -> None:
     _db_factory = factory
 
 
-def get_supabase() -> Client:
-    global _supabase_client
-    if _supabase_client is None:
-        settings = get_settings()
-        _supabase_client = create_client(settings.supabase_url, settings.supabase_service_key)
-    return _supabase_client
+@contextmanager
+def db_session() -> Iterator[Db]:
+    """One connection + one transaction for code that runs OUTSIDE a FastAPI request
+    (Inngest job steps, the MCP server, scripts): commit on success, rollback on any
+    exception (re-raised), always closed. Not for use inside request handlers (use
+    `routers.deps.get_db` there)."""
+    db = get_db_connection()
+    try:
+        with transaction(db):
+            yield db
+    finally:
+        db.close()
 
 
-def set_supabase(client: Client) -> None:
-    """Test/dependency-injection hook."""
-    global _supabase_client
-    _supabase_client = client
+def run_in_db(fn: Callable[[Db], T], *, on_event: Optional[Callable[..., None]] = None) -> T:
+    """Run `fn(db)` in its own `db_session()`, retrying the WHOLE unit (new connection and
+    transaction) if SQL Server picks it as a deadlock victim. `fn` must be safe to re-run."""
+    def attempt() -> T:
+        with db_session() as db:
+            return fn(db)
+
+    return run_with_deadlock_retry(attempt, on_event=on_event)
 
 
 def get_redis() -> aioredis.Redis:

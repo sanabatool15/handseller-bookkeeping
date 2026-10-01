@@ -3,7 +3,6 @@
 # two in sync when either changes.
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
-supabase>=2.7.0
 pydantic>=2.8.0
 pydantic-settings>=2.4.0
 redis>=5.0.0

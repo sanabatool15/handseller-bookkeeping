@@ -3,7 +3,7 @@ the full write-up (grounded in ai_agents/prompts/*.md and
 ai_agents/api/financial_advisor_agent.py, not invented behavior).
 
 Requires RUN_E2E=1 (see conftest.py) plus a real OPENAI_API_KEY and real
-Supabase/Redis, since these tests drive `Runner.run_streamed()` directly
+SQL Server/Redis, since these tests drive `Runner.run_streamed()` directly
 against a live model to assert on the actual sequence of
 handoff/tool-call stream events -- not just the final structured output.
 Without RUN_E2E=1 this whole module is skipped (not faked).
@@ -15,6 +15,8 @@ import os
 import uuid
 
 import pytest
+
+from tests.e2e import e2e_db
 
 RUN_E2E = os.environ.get("RUN_E2E") == "1"
 
@@ -190,7 +192,7 @@ async def test_expense_message_routes_to_record_agent_and_creates_expense(client
 
     # Best-effort cleanup of whatever the agent actually created -- find the
     # newest expense row for this org and track it for deletion.
-    rows = db.table("expenses").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+    rows = e2e_db.latest_rows(db, "expenses", org_id)
     if rows.data:
         cleanup.track_row("expenses", rows.data[0]["id"], org_id)
 
@@ -238,7 +240,7 @@ async def test_sale_message_routes_to_record_agent_and_creates_sale(client, db, 
         message=f"expected mode='record_entry', got {output!r}",
     )
 
-    rows = db.table("sales").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+    rows = e2e_db.latest_rows(db, "sales", org_id)
     if rows.data:
         cleanup.track_row("sales", rows.data[0]["id"], org_id)
 
@@ -355,7 +357,7 @@ async def test_ambiguous_transaction_and_question_routes_to_exactly_one_speciali
     elif capture.handoffs[0] == "Record agent":
         expense_args = capture.args_for("create_expense_record")
         if expense_args:
-            rows = db.table("expenses").select("id").eq("org_id", org_id).order("created_at", desc=True).limit(1).execute()
+            rows = e2e_db.latest_rows(db, "expenses", org_id)
             if rows.data:
                 cleanup.track_row("expenses", rows.data[0]["id"], org_id)
 

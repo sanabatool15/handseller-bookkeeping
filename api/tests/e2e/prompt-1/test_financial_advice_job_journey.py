@@ -44,11 +44,17 @@ def test_financial_advice_job_returns_202_then_completes_with_advice(client, mon
 
     # Drive the real job step functions directly, standing in for the
     # Inngest worker actually invoking `financial_advisor_job`.
+    from jobs import financial_agent_job
     from jobs.financial_agent_job import _step_gather_data, _step_run_agent, _step_finalize
+
+    async def _no_llm(*args, **kwargs):  # hermetic: no network, deterministic rule-based fallback
+        raise RuntimeError("no LLM in this suite")
+
+    monkeypatch.setattr(financial_agent_job, "run_bookkeeping_agent", _no_llm)
 
     async def run_job_steps() -> dict:
         summary = await _step_gather_data(job_id, org["org"]["id"])
-        result = await _step_run_agent(job_id, org["org"]["id"], summary)
+        result = await _step_run_agent(job_id, org["org"]["id"], org["user"]["id"], None, summary)
         return await _step_finalize(job_id, org["org"]["id"], result)
 
     asyncio.run(run_job_steps())

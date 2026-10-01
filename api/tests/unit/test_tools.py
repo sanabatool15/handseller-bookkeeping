@@ -1,6 +1,5 @@
 from ai_agents.tools.deep_link import build_deep_link
 from ai_agents.tools.bookkeeping_tools import build_investigate_tools, build_record_tools
-from tests.fakes import FakeSupabase
 
 
 def test_build_deep_link_basic():
@@ -14,11 +13,10 @@ def test_build_deep_link_with_id_and_query():
     assert "highlight=true" in link
 
 
-def test_build_investigate_tools_are_scoped_and_named():
+def test_build_investigate_tools_are_scoped_and_named(fake_db):
     """investigate_agent's tool set: read-only summary/breakdown + web_search,
     never a record-mutating tool (Section 4 of the design plan)."""
-    db = FakeSupabase()
-    tools = build_investigate_tools(db, org_id="org-1")
+    tools = build_investigate_tools(fake_db, org_id="org-1")
     names = {t.name for t in tools}
     assert names == {
         "get_monthly_summary",
@@ -28,18 +26,16 @@ def test_build_investigate_tools_are_scoped_and_named():
     }
 
 
-def test_build_record_tools_are_scoped_and_named():
+def test_build_record_tools_are_scoped_and_named(fake_db):
     """record_agent's tool set: record-creation + deep_link, never a
     read/investigate tool (Section 4 of the design plan)."""
-    db = FakeSupabase()
-    tools = build_record_tools(db, org_id="org-1", user_id="user-1")
+    tools = build_record_tools(fake_db, org_id="org-1", user_id="user-1")
     names = {t.name for t in tools}
     assert names == {"create_expense_record", "create_sales_record", "deep_link"}
 
 
-def test_create_expense_record_tool_declares_amount_param():
-    db = FakeSupabase()
-    tools = {t.name: t for t in build_record_tools(db, org_id="org-1", user_id="user-1")}
+def test_create_expense_record_tool_declares_amount_param(fake_db):
+    tools = {t.name: t for t in build_record_tools(fake_db, org_id="org-1", user_id="user-1")}
     create_expense_record = tools["create_expense_record"]
     # FunctionTool's JSON schema is what the LLM sees; confirm the closure
     # over org_id/user_id didn't leak into the model-visible parameters

@@ -1,9 +1,9 @@
 """Scenario 1: full sales + expense bookkeeping lifecycle for one org.
 
-Real-infra e2e: registers a real org/user row in the real Supabase/Postgres
+Real-infra e2e: registers a real org/user row in the real SQL Server
 instance, creates/updates/deletes real `sales` and `expenses` rows through
 the live HTTP surface (TestClient -> routers -> services -> repository ->
-real `supabase.Client`), and tears every created row down afterward.
+a real SQL Server connection), and tears every created row down afterward.
 
 See SCENARIOS.md in this directory for the full write-up.
 """

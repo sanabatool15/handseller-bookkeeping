@@ -1,12 +1,11 @@
 [project]
 name = "handseller-bookkeeping"
 version = "0.1.0"
-description = "Agentic bookkeeping backend: FastAPI + Supabase + Redis + Inngest + FastMCP + OpenAI Agents SDK"
+description = "Agentic bookkeeping backend: FastAPI + SQL Server (pyodbc) + Redis + Inngest + FastMCP + OpenAI Agents SDK"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
-    "supabase>=2.7.0",
     "pydantic>=2.8.0",
     "pydantic-settings>=2.4.0",
     "redis>=5.0.0",

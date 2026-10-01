@@ -59,6 +59,8 @@ sales but not view the full financial report" style restriction. The
 tenant boundary (org vs. org) is airtight; the boundary *within* an org is
 not yet implemented.
 
+> **Annotation (slice F0b):** there are no RLS policies at all on SQL Server and no Supabase service-role key any more; the application-layer `id`+`org_id` scoping is the only tenancy control. The text below describes the old Postgres setup.
+
 ## 5. RLS policies aren't the actual enforcement mechanism today
 
 As detailed in `02-database-schema.md` and `03-multi-tenancy-security.md`:

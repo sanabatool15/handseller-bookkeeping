@@ -1,4 +1,4 @@
-"""Scenario 5: auth and input-validation edge cases, against real Supabase.
+"""Scenario 5: auth and input-validation edge cases, against real SQL Server.
 
 Real-infra e2e (see PROMPT_V3.md): narrated, self-explanatory-on-failure
 version of prompt-2's auth/validation edge cases.

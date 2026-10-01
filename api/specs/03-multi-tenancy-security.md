@@ -60,8 +60,8 @@ genuinely nonexistent record produce the exact same response.
 
 ## Where this is tested
 
-- `tests/unit/test_ownership.py` — unit-level check on `get_ownership()`
-  and the scoped-query pattern using the in-memory fake Supabase client.
+- `tests/unit/test_ownership.py` — unit-level check on `get_ownership()` (fake enforcing id+org_id, plus the REAL function against a recording `Db`: allow-listed tables only, id and org_id in one statement). *(Annotation F0b: previously used the in-memory fake Supabase client.)*
+- `tests/unit/test_repository_sql_rules.py` (static SQL guard over every repository statement, now including sales/expenses/agent_jobs/agent_logs and dict-held SQL), `tests/integration/test_expenses_multitenancy.py`, `tests/unit/test_agent_job_service.py` (job + log scoping), `tests/sqlserver/test_ledger_sqlserver.py` (real DB, gated).
 - `tests/integration/test_sales_multitenancy.py` — end-to-end through
   `TestClient`: creates a sale for org A, then confirms org B gets 404 on
   read, update, and delete by the exact same id.
