@@ -265,6 +265,16 @@ This starts:
 Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 `http://localhost:8000/docs` for the FastAPI OpenAPI docs.
 
+### SQL Server environment variables (migration in progress, see `specs/13-sql-server-migration.md`)
+
+Auth (`/auth/*`) already runs on SQL Server; sales/expenses/agent routes still use Supabase
+until later slices. Run `../sql_server/01_foundation.sql` in SSMS first, then set either
+`MSSQL_CONNECTION_STRING` (full ODBC string) or `MSSQL_SERVER`, `MSSQL_DATABASE` (default
+`HandsellerDB`), `MSSQL_USER`/`MSSQL_PASSWORD` (empty user = Windows auth), `MSSQL_DRIVER`
+(default `ODBC Driver 18 for SQL Server`), `MSSQL_TRUST_SERVER_CERTIFICATE`. Requires the
+Microsoft ODBC driver on the machine running `uvicorn`. The `SUPABASE_*` variables remain
+required for the not-yet-migrated routes. Optional real-DB tests: `RUN_MSSQL=1 pytest tests/sqlserver -v`.
+
 ### Locally without Docker
 
 ```bash

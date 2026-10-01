@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
-from supabase import Client
 
-from routers.deps import get_db
+from core.db import Db
+from routers.deps import get_sql_db
 from services import auth_service
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -23,7 +23,7 @@ class LoginRequest(BaseModel):
 
 
 @router.post("/register", status_code=201)
-def register(payload: RegisterRequest, db: Client = Depends(get_db)):
+def register(payload: RegisterRequest, db: Db = Depends(get_sql_db)):
     try:
         return auth_service.register(
             db, email=payload.email, password=payload.password,
@@ -34,7 +34,7 @@ def register(payload: RegisterRequest, db: Client = Depends(get_db)):
 
 
 @router.post("/login")
-def login(payload: LoginRequest, db: Client = Depends(get_db)):
+def login(payload: LoginRequest, db: Db = Depends(get_sql_db)):
     try:
         return auth_service.login(db, email=payload.email, password=payload.password)
     except auth_service.AuthError as exc:

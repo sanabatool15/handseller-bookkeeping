@@ -7,7 +7,17 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Supabase
+    # SQL Server (pyodbc). Either give a full ODBC string in MSSQL_CONNECTION_STRING
+    # or let the parts below build one. Empty MSSQL_USER => Windows auth (Trusted_Connection).
+    mssql_connection_string: str = ""
+    mssql_server: str = "localhost"
+    mssql_database: str = "HandsellerDB"
+    mssql_user: str = ""
+    mssql_password: str = ""
+    mssql_driver: str = "ODBC Driver 18 for SQL Server"
+    mssql_trust_server_certificate: bool = True
+
+    # Supabase (legacy: still used by sales/expenses/agent routes until later migration slices)
     supabase_url: str = "https://example.supabase.co"
     supabase_service_key: str = "test-service-key"
     supabase_anon_key: str = "test-anon-key"
@@ -37,6 +47,22 @@ class Settings(BaseSettings):
     # App
     app_env: str = "development"
     log_level: str = "INFO"
+
+
+def build_mssql_connection_string(settings: Settings) -> str:
+    if settings.mssql_connection_string:
+        return settings.mssql_connection_string
+    parts = [
+        f"DRIVER={{{settings.mssql_driver}}}",
+        f"SERVER={settings.mssql_server}",
+        f"DATABASE={settings.mssql_database}",
+    ]
+    if settings.mssql_user:
+        parts += [f"UID={settings.mssql_user}", f"PWD={settings.mssql_password}"]
+    else:
+        parts.append("Trusted_Connection=yes")
+    parts.append("TrustServerCertificate=" + ("yes" if settings.mssql_trust_server_certificate else "no"))
+    return ";".join(parts) + ";"
 
 
 @lru_cache

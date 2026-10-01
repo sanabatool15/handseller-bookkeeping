@@ -6,15 +6,30 @@ client) without touching import machinery.
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 import redis.asyncio as aioredis
 from supabase import Client, create_client
 
-from core.config import get_settings
+from core.config import build_mssql_connection_string, get_settings
+from core.db import Db, connect
 
 _supabase_client: Optional[Client] = None
 _redis_client: Optional[aioredis.Redis] = None
+_db_factory: Optional[Callable[[], Db]] = None
+
+
+def get_db_connection() -> Db:
+    """Return a NEW SQL Server `Db` (one per request/unit of work; caller closes it)."""
+    if _db_factory is not None:
+        return _db_factory()
+    return connect(build_mssql_connection_string(get_settings()))
+
+
+def set_db_factory(factory: Optional[Callable[[], Db]]) -> None:
+    """Test/dependency-injection hook; pass None to restore the real pyodbc factory."""
+    global _db_factory
+    _db_factory = factory
 
 
 def get_supabase() -> Client:

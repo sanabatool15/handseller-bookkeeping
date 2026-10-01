@@ -1,3 +1,5 @@
+> **Migration note:** the database is moving from Supabase/Postgres to SQL Server, slice by slice. `orgs` and `users` are already ported (`../sql_server/01_foundation.sql`); the Postgres DDL below stays accurate for the other tables until they are migrated. See [`13-sql-server-migration.md`](13-sql-server-migration.md).
+
 # Database Schema
 
 Full SQL lives in `sql/schema.sql`. This doc explains what each table is for
