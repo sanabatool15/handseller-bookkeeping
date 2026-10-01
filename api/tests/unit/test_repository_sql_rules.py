@@ -17,7 +17,7 @@ import re
 import pytest
 
 REPO_DIR = pathlib.Path(__file__).resolve().parents[2] / "repository"
-TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs", "products"}
+TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers"}
 ROOT_TABLES = {"orgs"}
 SQL_START = re.compile(r"^\s*(/\*.*?\*/\s*)?(SET\s+NOCOUNT|DECLARE|SELECT|INSERT|UPDATE|DELETE|WITH|MERGE)\b", re.I | re.S)
 TABLE_REF = re.compile(r"\b(?:FROM|JOIN|UPDATE|INTO|DELETE\s+FROM)\s+(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)", re.I)
@@ -139,14 +139,14 @@ def test_by_id_statements_include_org_id():
 def test_guard_sees_sql_in_dicts_and_new_repositories():
     """The guard must cover the F0b repositories and dict-held SQL (base._OWNERSHIP_SQL)."""
     seen = {p.name for p, _, sql, _ in _all() if sql}
-    assert {"sales_repository.py", "expenses_repository.py", "agent_jobs_repository.py", "products_repository.py", "base.py"} <= seen
+    assert {"sales_repository.py", "expenses_repository.py", "agent_jobs_repository.py", "products_repository.py", "customers_repository.py", "base.py"} <= seen
     base_sql = [sql for p, _, sql, _ in _all() if p.name == "base.py" and sql]
     assert any("FROM sales WHERE id = ? AND org_id = ?" in q for q in base_sql)
 
 
 def test_every_tenant_table_has_a_repository_statement_with_org_id():
     text = " ".join(sql for _, _, sql, _ in _all() if sql)
-    for table in ("sales", "expenses", "agent_jobs", "agent_logs", "products"):
+    for table in ("sales", "expenses", "agent_jobs", "agent_logs", "products", "customers"):
         assert re.search(rf"\b{table}\b[^;]*\borg_id\b", text, re.I), table
 
 
@@ -175,3 +175,28 @@ def test_products_adjust_stock_is_one_guarded_statement():
     stmt = next(iter(sql))
     assert re.search(r"WHERE id = \? AND org_id = \? AND stock_qty \+ \? >= 0", stmt)
     assert "INTO @o" in stmt
+
+
+def _customers_sql():
+    return {s for p, _, s, _ in _all() if p.name == "customers_repository.py" and s}
+
+
+def test_customers_summary_scopes_org_id_on_both_tables():
+    stmt = next(s for s in _customers_sql() if "AS sale_count" in s)
+    assert re.search(r"JOIN sales s ON .*\bs\.org_id = \?", stmt) and re.search(r"WHERE c\.id = \? AND c\.org_id = \?", stmt)
+    assert "GROUP BY" in stmt and "LEFT JOIN" in stmt
+
+
+def test_customers_delete_has_not_exists_guard_in_same_statement():
+    stmt = next(s for s in _customers_sql() if s.startswith("DELETE FROM customers"))
+    assert "WHERE id = ? AND org_id = ?" in stmt and re.search(r"NOT EXISTS \(SELECT 1 FROM sales WHERE .*sales\.org_id = \?\)", stmt)
+
+
+def test_customers_search_is_parameterised_like_with_escape():
+    stmt = next(s for s in _customers_sql() if "LIKE" in s)
+    assert stmt.count("LIKE ? ESCAPE") == 2 and "org_id = ?" in stmt
+
+
+def test_sales_customer_id_checked_via_get_ownership_allow_list():
+    base_sql = [sql for p, _, sql, _ in _all() if p.name == "base.py" and sql]
+    assert any("FROM customers WHERE id = ? AND org_id = ?" in q for q in base_sql)

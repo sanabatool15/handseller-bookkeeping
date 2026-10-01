@@ -9,6 +9,7 @@ import json
 import pytest
 
 from repository import agent_jobs_repository as jobs_repo
+from repository import customers_repository as cust_repo
 from repository import expenses_repository as exp_repo
 from repository import products_repository as prod_repo
 from repository import sales_repository as sales_repo
@@ -159,3 +160,64 @@ def test_product_listing_low_stock_variant_and_paging():
     assert db.calls[0][1] == ("o1", 0, 1)
     prod_repo.list_products(db, org_id="o1", limit=10, offset=20, low_stock=True)
     assert "stock_qty <= reorder_level" in db.calls[1][0] and db.calls[1][1] == ("o1", 20, 10)
+
+
+def test_sale_insert_and_update_carry_customer_id():
+    db = RecDb([{"id": "s1"}])
+    sales_repo.create_sale(db, org_id="o1", created_by="u1", amount=1, category="c", description=None, customer_name=None, customer_id="c1")
+    sql, p = db.calls[0]
+    assert "customer_id" in sql and p[-1] == "c1" and len(p) == 8
+    sales_repo.create_sale(db, org_id="o1", created_by="u1", amount=1, category="c", description=None, customer_name=None)
+    assert db.calls[1][1][-1] is None  # optional: NULL when absent
+    sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"amount": 2.0})
+    assert db.calls[2][1][4:6] == (0, None) and db.calls[2][1][-2:] == ("s1", "o1")  # flag 0 = leave customer_id alone
+    sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"customer_id": None})
+    assert db.calls[3][1][4:6] == (1, None)  # present null = unlink
+    sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"customer_id": "c9"})
+    assert db.calls[4][1][4:6] == (1, "c9")
+
+
+def test_create_customer_params_and_output_into():
+    db = RecDb([{"id": "c1"}])
+    cust_repo.create_customer(db, org_id="o1", created_by="u1", name="Ana", phone="1", email=None, address=None, notes="n")
+    sql, p = db.calls[0]
+    assert "OUTPUT" in sql and "INTO @o" in sql and "SELECT * FROM @o" in sql
+    assert p == ("o1", "u1", "Ana", "1", None, None, "n")
+
+
+def test_customer_scoped_statements_and_update_flags():
+    db = RecDb([{"id": "c1"}])
+    cust_repo.get_customer_scoped(db, customer_id="c1", org_id="o1")
+    assert db.calls[-1][1] == ("c1", "o1")
+    cust_repo.update_customer_scoped(db, customer_id="c1", org_id="o1", updates={"phone": None, "notes": "x"})
+    sql, p = db.calls[-1]
+    assert "WHERE id = ? AND org_id = ?" in sql
+    assert p == (None, 1, None, 0, None, 0, None, 1, "x", "c1", "o1")  # name, (flag,val) x phone/email/address/notes, id, org
+    with pytest.raises(ValueError):
+        cust_repo.update_customer_scoped(RecDb(), customer_id="c", org_id="o", updates={"org_id": "x"})
+
+
+def test_customer_delete_passes_org_twice_and_reports_rowcount():
+    db = RecDb(rowcount=1)
+    assert cust_repo.delete_customer_scoped(db, customer_id="c1", org_id="o1") is True
+    assert db.calls[0][1] == ("c1", "o1", "o1")
+    assert cust_repo.delete_customer_scoped(RecDb(rowcount=0), customer_id="c1", org_id="o2") is False
+
+
+def test_customer_search_escapes_like_wildcards():
+    db = RecDb()
+    cust_repo.list_customers(db, org_id="o1", q="50%_[x]\\", limit=0, offset=-1)
+    sql, p = db.calls[0]
+    assert "LIKE ? ESCAPE" in sql and p == ("o1", "50\\%\\_\\[x]\\\\%", "50\\%\\_\\[x]\\\\%", 0, 1)
+    cust_repo.list_customers(db, org_id="o1")
+    assert "LIKE" not in db.calls[1][0] and db.calls[1][1] == ("o1", 0, 100)
+    assert cust_repo._like_prefix("a") == "a%"
+
+
+def test_customer_summary_row_is_split_and_scoped_twice():
+    row = {"id": "c1", "org_id": "o1", "name": "Ana", "total_sales": 15.5, "sale_count": 2, "last_sale_date": "2026-01-02"}
+    db = RecDb([row])
+    out = cust_repo.get_customer_summary_scoped(db, customer_id="c1", org_id="o1")
+    assert out == {"customer": {"id": "c1", "org_id": "o1", "name": "Ana"}, "total_sales": 15.5, "sale_count": 2, "last_sale_date": "2026-01-02"}
+    assert db.calls[0][1] == ("o1", "c1", "o1")
+    assert cust_repo.get_customer_summary_scoped(RecDb([]), customer_id="c1", org_id="o2") is None

@@ -31,8 +31,9 @@ class FakeSqlStore:
         self.agent_jobs: dict[str, dict[str, Any]] = {}
         self.agent_logs: dict[str, dict[str, Any]] = {}
         self.products: dict[str, dict[str, Any]] = {}
+        self.customers: dict[str, dict[str, Any]] = {}
 
-    _TABLES = ("users", "orgs", "sales", "expenses", "agent_jobs", "agent_logs", "products")
+    _TABLES = ("users", "orgs", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers")
 
     def snapshot(self):
         return copy.deepcopy({t: getattr(self, t) for t in self._TABLES})
@@ -119,7 +120,8 @@ def build_orgs_fakes(store: FakeSqlStore) -> dict[str, Any]:
     return {k: v for k, v in locals().items() if callable(v) and k != "store"}
 
 
-def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: str, extra_col: str) -> dict[str, Any]:
+def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: str, extra_col: str,
+                  link_cols: tuple[str, ...] = ()) -> dict[str, Any]:
     """Fakes for sales/expenses. They scope by id AND org_id exactly like the SQL does, so a
     cross-tenant id simply "does not exist" (=> 404 at the router), and they sum per date range."""
     def tbl() -> dict[str, dict[str, Any]]:
@@ -129,6 +131,7 @@ def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: s
         row = {"id": str(uuid.uuid4()), "org_id": org_id, "created_by": created_by, "amount": float(amount),
                "category": category, extra_col: extra.get(extra_col), "description": description,
                date_col: repo_base.today_utc().isoformat(), "created_at": _now(), "updated_at": _now()}
+        row.update({c: extra.get(c) for c in link_cols})  # e.g. sales.customer_id (null when absent)
         tbl()[row["id"]] = row
         return dict(row)
 
@@ -152,13 +155,14 @@ def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: s
         return dict(r) if r and r["org_id"] == org_id else None
 
     def update_scoped(db, *, org_id, updates, **ids) -> Optional[dict]:
-        allowed = {"amount", "category", extra_col, "description"}
+        allowed = {"amount", "category", extra_col, "description", *link_cols}
         if set(updates) - allowed:
             raise ValueError(f"cannot update columns: {sorted(set(updates) - allowed)}")
         r = tbl().get(ids[f"{singular}_id"])
         if not r or r["org_id"] != org_id:
             return None
-        r.update({k: (float(v) if k == "amount" else v) for k, v in updates.items() if v is not None})
+        # link columns (customer_id): a PRESENT key is written even when None (unlink); others skip None
+        r.update({k: (float(v) if k == "amount" else v) for k, v in updates.items() if v is not None or k in link_cols})
         r["updated_at"] = _now()
         return dict(r)
 
@@ -189,11 +193,12 @@ def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: s
 
 
 def build_sales_fakes(store: FakeSqlStore) -> dict[str, Any]:
-    fakes = _ledger_fakes(store, table="sales", singular="sale", date_col="sale_date", extra_col="customer_name")
+    fakes = _ledger_fakes(store, table="sales", singular="sale", date_col="sale_date", extra_col="customer_name",
+                          link_cols=("customer_id",))
     inner = fakes["create_sale"]
-    fakes["create_sale"] = lambda db, *, org_id, created_by, amount, category, description, customer_name: inner(
+    fakes["create_sale"] = lambda db, *, org_id, created_by, amount, category, description, customer_name, customer_id=None: inner(
         db, org_id=org_id, created_by=created_by, amount=amount, category=category, description=description,
-        customer_name=customer_name)
+        customer_name=customer_name, customer_id=customer_id)
     return fakes
 
 
@@ -273,6 +278,73 @@ def build_products_fakes(store: FakeSqlStore) -> dict[str, Any]:
     return {k: v for k, v in locals().items() if callable(v) and k not in ("store", "_check", "_sku_taken")}
 
 
+def build_customers_fakes(store: FakeSqlStore) -> dict[str, Any]:
+    """Fakes for customers. Like the DB: id AND org_id scoping, filtered UNIQUE (org_id, phone) WHERE phone IS NOT NULL
+    (=> DuplicateRecordError), prefix search where LIKE wildcards in the term are literal (the repo escapes them),
+    delete refused while sales reference the customer, summary aggregated over sales scoped on both tables."""
+    def _phone_taken(org_id: str, phone, except_id: str | None = None) -> bool:
+        return phone is not None and any(
+            r["org_id"] == org_id and r["phone"] is not None and r["phone"].lower() == phone.lower() and r["id"] != except_id
+            for r in store.customers.values())
+
+    def create_customer(db, *, org_id, created_by, name, phone, email, address, notes) -> dict:
+        if _phone_taken(org_id, phone):
+            raise DuplicateRecordError("duplicate (org_id, phone) (2601)")
+        row = {"id": str(uuid.uuid4()), "org_id": org_id, "created_by": created_by, "name": name, "phone": phone,
+               "email": email, "address": address, "notes": notes, "created_at": _now(), "updated_at": _now()}
+        store.customers[row["id"]] = row
+        return dict(row)
+
+    def list_customers(db, *, org_id, limit=100, offset=0, q=None) -> list[dict]:
+        limit, offset = repo_base.clamp_page(limit, offset)
+        mine = [r for r in store.customers.values() if r["org_id"] == org_id]
+        if q:
+            ql = q.lower()
+            mine = [r for r in mine if r["name"].lower().startswith(ql) or (r["phone"] or "").lower().startswith(ql)]
+        mine.sort(key=lambda r: (r["name"].lower(), r["id"]))
+        return [dict(r) for r in mine[offset:offset + limit]]
+
+    def get_customer_scoped(db, *, customer_id, org_id) -> Optional[dict]:
+        r = store.customers.get(customer_id)
+        return dict(r) if r and r["org_id"] == org_id else None
+
+    def update_customer_scoped(db, *, customer_id, org_id, updates) -> Optional[dict]:
+        allowed = {"name", "phone", "email", "address", "notes"}
+        if set(updates) - allowed:
+            raise ValueError(f"cannot update columns: {sorted(set(updates) - allowed)}")
+        r = store.customers.get(customer_id)
+        if not r or r["org_id"] != org_id:
+            return None
+        if "phone" in updates and _phone_taken(org_id, updates["phone"], except_id=customer_id):
+            raise DuplicateRecordError("duplicate (org_id, phone) (2601)")
+        if updates.get("name") is not None:
+            r["name"] = updates["name"]
+        for col in ("phone", "email", "address", "notes"):
+            if col in updates:
+                r[col] = updates[col]  # present key written, even None (clears)
+        r["updated_at"] = _now()
+        return dict(r)
+
+    def delete_customer_scoped(db, *, customer_id, org_id) -> bool:
+        r = store.customers.get(customer_id)
+        if not r or r["org_id"] != org_id:
+            return False
+        if any(s.get("customer_id") == customer_id and s["org_id"] == org_id for s in store.sales.values()):
+            return False  # NOT EXISTS (sales ...) guard
+        del store.customers[customer_id]
+        return True
+
+    def get_customer_summary_scoped(db, *, customer_id, org_id) -> Optional[dict]:
+        r = store.customers.get(customer_id)
+        if not r or r["org_id"] != org_id:
+            return None
+        sales = [s for s in store.sales.values() if s.get("customer_id") == customer_id and s["org_id"] == org_id]
+        return {"customer": dict(r), "total_sales": float(sum(s["amount"] for s in sales)), "sale_count": len(sales),
+                "last_sale_date": max((s["sale_date"] for s in sales), default=None)}
+
+    return {k: v for k, v in locals().items() if callable(v) and k not in ("store", "_phone_taken")}
+
+
 def build_agent_jobs_fakes(store: FakeSqlStore) -> dict[str, Any]:
     def create_job(db, *, job_name, org_id, requested_by, input_payload=None) -> dict:
         row = {"id": str(uuid.uuid4()), "job_name": job_name, "org_id": org_id, "requested_by": requested_by,
@@ -318,7 +390,7 @@ def build_agent_jobs_fakes(store: FakeSqlStore) -> dict[str, Any]:
 
 def build_ownership_fake(store: FakeSqlStore):
     def get_ownership(db, *, table: str, record_id: str, org_id: str) -> bool:
-        if table not in ("users", "sales", "expenses", "agent_jobs", "products"):
+        if table not in ("users", "sales", "expenses", "agent_jobs", "products", "customers"):
             raise repo_base.RepositoryError(f"ownership check not supported for table {table!r}")
         r = getattr(store, table).get(record_id)
         return bool(r and r.get("org_id") == org_id)
@@ -327,7 +399,7 @@ def build_ownership_fake(store: FakeSqlStore):
 
 
 def install_fake_repos(monkeypatch, store: FakeSqlStore) -> None:
-    from repository import (agent_jobs_repository, expenses_repository, health_repository, orgs_repository,
+    from repository import (agent_jobs_repository, customers_repository, expenses_repository, health_repository, orgs_repository,
                             products_repository, sales_repository, users_repository)
 
     for name, fn in build_sales_fakes(store).items():
@@ -336,6 +408,8 @@ def install_fake_repos(monkeypatch, store: FakeSqlStore) -> None:
         monkeypatch.setattr(expenses_repository, name, fn)
     for name, fn in build_products_fakes(store).items():
         monkeypatch.setattr(products_repository, name, fn)
+    for name, fn in build_customers_fakes(store).items():
+        monkeypatch.setattr(customers_repository, name, fn)
     for name, fn in build_agent_jobs_fakes(store).items():
         monkeypatch.setattr(agent_jobs_repository, name, fn)
     monkeypatch.setattr(repo_base, "get_ownership", build_ownership_fake(store))

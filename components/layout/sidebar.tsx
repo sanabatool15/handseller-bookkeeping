@@ -7,6 +7,7 @@ import {
   Receipt,
   Wallet,
   Package,
+  Users,
   Sparkles,
   Settings,
   LogOut,
@@ -20,6 +21,7 @@ const NAV = [
   { href: "/sales", label: "Sales", icon: Receipt },
   { href: "/expenses", label: "Expenses", icon: Wallet },
   { href: "/products", label: "Products", icon: Package },
+  { href: "/customers", label: "Customers", icon: Users },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 

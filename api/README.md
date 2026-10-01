@@ -21,7 +21,7 @@ ai_agents/     (renamed from agents/ — see "Package-name collisions, fixed" be
   rules/       Deterministic rule-based fallback (works fully offline)
   tools/       Utility functions (web search, deep-link generation)
 core/          FastAPI app wiring, settings, SQL Server (`db.py`, `clients.py`)/Redis clients, JWT
-../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql, 03_products.sql (+ TEST_CASES.md)
+../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql, 03_products.sql, 04_customers.sql (+ TEST_CASES.md)
 sql/           LEGACY Postgres/Supabase schema, kept for reference only (no longer used)
 tests/
   unit/        Mocked DB (in-memory fake) + fakeredis
@@ -61,6 +61,18 @@ All require auth; `POST`/`PUT` require `Idempotency-Key`. Cross-tenant ids retur
 | `GET /products?limit=&offset=&low_stock=true` | ordered by name; `low_stock` = `stock_qty <= reorder_level` |
 | `GET/PUT/DELETE /products/{id}` | PUT updates `name`, `sku`, `price`, `reorder_level`, `is_active` (never stock); 409 on SKU clash |
 | `POST /products/{id}/adjust-stock` | body `{delta: int != 0, reason?: str}`; one atomic guarded `UPDATE`; 409 if stock would go negative, 404 unknown/other org |
+
+## Customers endpoints (slice F2, `../sql_server/04_customers.sql`)
+
+All require auth; `POST`/`PUT` require `Idempotency-Key`. Cross-tenant ids return 404. Details: `specs/14-inventory-and-cash-domain.md`.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /customers` | 201. Body `name` (required, <= 200), optional `phone` (<= 32), `email`, `address`, `notes`. 422 invalid, 409 duplicate phone in the org (blank phone = none) |
+| `GET /customers?limit=&offset=&q=` | ordered by name; `q` = prefix match on name or phone, wildcard characters are literal |
+| `GET/PUT/DELETE /customers/{id}` | PUT: `name` never cleared; explicit `null` clears phone/email/address/notes. DELETE: 409 while the customer still has sales |
+| `GET /customers/{id}/summary` | `{customer, total_sales, sale_count, last_sale_date}` computed in SQL (org-scoped on both tables) |
+| `POST/PUT /sales` | accept optional `customer_id` (other org / unknown => 404 "Customer not found"); responses include `customer_id` (null when none); `PUT` with `customer_id: null` unlinks. Free-text `customer_name` still works |
 
 ## Structural multi-tenancy (critical)
 
@@ -279,7 +291,7 @@ Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 ### SQL Server environment variables (see `specs/13-sql-server-migration.md`)
 
 Everything (auth, sales, expenses, agent jobs/logs, Inngest job steps, MCP server, agent tools) runs on
-SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql` in SSMS first, then set either
+SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql` then `04_customers.sql` in SSMS first, then set either
 `MSSQL_CONNECTION_STRING` (full ODBC string) or `MSSQL_SERVER`, `MSSQL_DATABASE` (default
 `HandsellerDB`), `MSSQL_USER`/`MSSQL_PASSWORD` (empty user = Windows auth), `MSSQL_DRIVER`
 (default `ODBC Driver 18 for SQL Server`), `MSSQL_TRUST_SERVER_CERTIFICATE`. Requires the

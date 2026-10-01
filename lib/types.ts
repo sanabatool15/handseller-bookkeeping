@@ -25,6 +25,7 @@ export interface LedgerEntry {
   category: string;
   description?: string | null;
   customer_name?: string | null;
+  customer_id?: string | null; // sales only: optional link to a customer
   voucher_reference?: string | null;
   sale_date?: string;
   expense_date?: string;
@@ -37,6 +38,7 @@ export interface LedgerEntryInput {
   category?: string;
   description?: string | null;
   customer_name?: string | null;
+  customer_id?: string | null; // sales only; null unlinks on update
   voucher_reference?: string | null;
 }
 
@@ -95,4 +97,32 @@ export interface ProductInput {
   stock_qty?: number;
   reorder_level?: number;
   is_active?: boolean;
+}
+
+export interface Customer {
+  id: string;
+  org_id: string;
+  created_by: string | null;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CustomerInput {
+  name: string;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  notes?: string | null;
+}
+
+export interface CustomerSummary {
+  customer: Customer;
+  total_sales: number;
+  sale_count: number;
+  last_sale_date: string | null;
 }

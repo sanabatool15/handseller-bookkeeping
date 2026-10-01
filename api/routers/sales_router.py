@@ -16,6 +16,7 @@ class SaleCreate(BaseModel):
     category: str = "general"
     description: str | None = None
     customer_name: str | None = None
+    customer_id: str | None = None
 
 
 class SaleUpdate(BaseModel):
@@ -23,6 +24,7 @@ class SaleUpdate(BaseModel):
     category: str | None = None
     description: str | None = None
     customer_name: str | None = None
+    customer_id: str | None = None  # explicit null unlinks the customer; omitted leaves it
 
 
 @router.post("", status_code=201)
@@ -31,7 +33,10 @@ def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_use
         return sales_service.create_sale(
             db, org_id=user.org_id, user_id=user.user_id, amount=payload.amount,
             category=payload.category, description=payload.description, customer_name=payload.customer_name,
+            customer_id=payload.customer_id,
         )
+    except sales_service.NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except sales_service.ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -52,7 +57,7 @@ def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db
 @router.put("/{sale_id}")
 def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
-        return sales_service.update_sale(db, org_id=user.org_id, sale_id=sale_id, updates=payload.model_dump())
+        return sales_service.update_sale(db, org_id=user.org_id, sale_id=sale_id, updates=payload.model_dump(exclude_unset=True))
     except sales_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except sales_service.ValidationError as exc:

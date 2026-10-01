@@ -192,3 +192,72 @@ Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_products_sqlserver.py -v` from `
 Expected: 6 tests pass (constraints, unique-per-org, JSON shape/trigger, isolation, adjust edge cases, 12-thread race).
 Pass: all green; tests clean up their own orgs/users/products.
 
+
+## Slice F2: customers (`04_customers.sql`)
+
+Requires 01..04 applied. Replace `<ORG>`, `<ORG2>` (two orgs), `<ID>` with real GUIDs.
+
+### F2-01 Script runs and is re-runnable
+Steps: execute `04_customers.sql` in SSMS; execute it a second time.
+Expected: no errors either time. `customers` exists; `sales.customer_id` exists exactly once.
+Pass: `SELECT COL_LENGTH('dbo.sales','customer_id');` is not NULL; second run changes nothing (also with a sales table that already has the column).
+
+### F2-02 Indexes, FK, trigger
+Steps: `SELECT name, is_unique, filter_definition FROM sys.indexes WHERE object_id IN (OBJECT_ID('dbo.customers'), OBJECT_ID('dbo.sales'));`, `SELECT name FROM sys.foreign_keys WHERE name='FK_sales_customer';`, `SELECT name FROM sys.triggers WHERE name='trg_customers_updated_at';`
+Expected: `idx_customers_org_id`, `UQ_customers_org_phone` (unique, filter `([phone] IS NOT NULL)`), `UQ_customers_id_org`, `idx_sales_org_customer`, the FK and the trigger exist.
+Pass: all present.
+
+### F2-03 Filtered unique phone per org
+Steps: insert `(org <ORG>, name 'A', phone '555')` twice; then insert `(<ORG2>, 'B', '555')`; then insert three customers in `<ORG>` with `phone NULL`.
+Expected: the second insert fails with error 2601 (unique index); the `<ORG2>` insert works; all NULL-phone inserts work (a plain UNIQUE would allow only one NULL).
+Pass: yes. API: `POST /customers` twice with the same phone => 409; blank phone `""` is stored as NULL.
+
+### F2-04 updated_at trigger
+Steps: insert a customer, `WAITFOR DELAY '00:00:01'`, `UPDATE customers SET notes=N'x' WHERE id=<ID>`, select `created_at, updated_at`.
+Expected: `updated_at` > `created_at`.
+Pass: yes.
+
+### F2-05 CRUD via API and validation
+Steps: `POST /customers {"name":"Ana","phone":"555","email":"a@x.com"}` (201); `GET /customers`; `GET/PUT /customers/{id}`; `PUT {"phone": null}` clears the phone; `POST` with `{"name":""}`, `{"name":"x","email":"nope"}`, a 201-char name.
+Expected: 201/200 with the row; phone `null` after the clear and other fields untouched; the invalid bodies give 422.
+Pass: yes.
+
+### F2-06 Search `?q=` (prefix on name or phone, wildcards literal)
+Steps: customers `Anna`(phone 100), `Annabel`, `Bob`(phone `1%0`), `a_b`, `axb`; call `GET /customers?q=ann`, `?q=10`, `?q=1%25`, `?q=%25`, `?q=_`, `?q=a_`.
+Expected: `[Anna, Annabel]`; `[Anna]`; `[Bob]`; `[]`; `[]`; `[a_b]` (`%`, `_`, `[` are escaped, never wildcards).
+Pass: yes.
+
+### F2-07 Sale with customer_id
+Steps: `POST /sales {"amount":10,"customer_id":"<ID>","customer_name":"walk-in"}`; `POST /sales {"amount":5}`; `GET /sales/{id}`.
+Expected: 201 with `customer_id` = `<ID>` and `customer_name` unchanged; the second sale has `customer_id: null`.
+Pass: yes. `SELECT customer_id FROM sales WHERE id=...` matches.
+
+### F2-08 Foreign / unknown customer on a sale => 404
+Steps: with org B's token `POST /sales {"amount":5,"customer_id":"<ORG A customer id>"}` and with a random GUID; `PUT /sales/{B sale} {"customer_id":"<A's id>"}`.
+Expected: all three 404 `{"detail":"Customer not found"}` (identical to the random-GUID answer), no sale created/changed. Direct SQL `INSERT INTO sales(org_id,amount,customer_id) VALUES(<ORG2>,1,<ORG A customer>)` fails with error 547 (composite FK).
+Pass: yes.
+
+### F2-09 Summary
+Steps: customer with sales 10.25 and 5 (plus another customer's sale and a sale without customer): `GET /customers/{id}/summary`; then for a customer without sales.
+Expected: `{"customer":{...},"total_sales":15.25,"sale_count":2,"last_sale_date":"<date>"}`; `0 / 0 / null` for the empty one. Compare with `SELECT SUM(amount),COUNT(*),MAX(sale_date) FROM sales WHERE customer_id=<ID> AND org_id=<ORG>`.
+Pass: numbers equal.
+
+### F2-10 Delete behaviour (409 while sales exist)
+Steps: `DELETE /customers/{id}` for a customer with sales; then `PUT /sales/{sale} {"customer_id": null}` for each sale; `DELETE` again; `DELETE` once more.
+Expected: 409 "Customer has sales..." (customer and its sales untouched); sales then show `customer_id: null`; DELETE 204; last DELETE 404.
+Pass: yes. The delete is ONE statement with `NOT EXISTS (SELECT 1 FROM sales ...)`; FK_sales_customer is the backstop for a concurrent sale.
+
+### F2-11 Tenant isolation => 404
+Steps: org B's token: `GET/PUT/DELETE /customers/{A's id}`, `GET /customers/{A's id}/summary`, `GET /customers`, `GET /customers?q=<A's name>`.
+Expected: 404 for the by-id calls (also DELETE of an A customer that has sales: 404, not 409); lists are `[]`.
+Pass: yes.
+
+### F2-12 Idempotency
+Steps: `POST /customers` and `PUT /customers/{id}` without `Idempotency-Key`; then the same POST twice with one key.
+Expected: 400 for missing key; the replay returns the same body and only one customer exists.
+Pass: yes.
+
+### F2-13 Automated DB tests
+Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_customers_sqlserver.py -v` from `api/`.
+Expected: 5 tests pass (summary join/scoping, filtered unique index, delete behaviour, composite FK, literal wildcards + trigger + isolation).
+Pass: all green; tests clean up their own rows.

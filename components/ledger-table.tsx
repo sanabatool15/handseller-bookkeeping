@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { LedgerFormModal } from "@/components/ledger-form-modal";
-import { LedgerEntry, LedgerEntryInput } from "@/lib/types";
+import { Customer, LedgerEntry, LedgerEntryInput } from "@/lib/types";
 import { LedgerKind } from "@/lib/use-ledger";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
@@ -17,6 +17,8 @@ interface LedgerTableProps {
   onCreate: (input: LedgerEntryInput) => Promise<void>;
   onUpdate: (id: string, input: Partial<LedgerEntryInput>) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  /** Sales only: customers for the optional customer dropdown / linked-name fallback. */
+  customers?: Customer[];
 }
 
 export function LedgerTable({
@@ -26,6 +28,7 @@ export function LedgerTable({
   onCreate,
   onUpdate,
   onDelete,
+  customers,
 }: LedgerTableProps) {
   const [query, setQuery] = useState("");
   const [formOpen, setFormOpen] = useState(false);
@@ -33,6 +36,7 @@ export function LedgerTable({
   const [viewing, setViewing] = useState<LedgerEntry | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  const customerNames = new Map((customers ?? []).map((c) => [c.id, c.name]));
   const extraLabel = kind === "sales" ? "Customer" : "Voucher";
   const dateField = kind === "sales" ? "sale_date" : "expense_date";
 
@@ -112,7 +116,9 @@ export function LedgerTable({
                   <Badge>{entry.category}</Badge>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground">
-                  {kind === "sales" ? entry.customer_name : entry.voucher_reference}
+                  {kind === "sales"
+                    ? entry.customer_name || (entry.customer_id ? customerNames.get(entry.customer_id) : null)
+                    : entry.voucher_reference}
                 </td>
                 <td className="px-4 py-3 text-right font-medium tabular-nums">
                   {formatCurrency(entry.amount)}
@@ -188,6 +194,7 @@ export function LedgerTable({
         open={formOpen}
         onOpenChange={setFormOpen}
         initial={editing}
+        customers={customers}
         onSubmit={(input) =>
           editing ? onUpdate(editing.id, input) : onCreate(input)
         }

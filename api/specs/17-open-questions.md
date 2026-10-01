@@ -57,3 +57,17 @@
 28. **Stock/price edits via `PUT`:** `PUT` cannot change `stock_qty` (use adjust-stock) and cannot set a column to NULL (same COALESCE convention as sales). `is_active=false` is accepted but nothing filters on it yet.
 29. **`updated_at` is pre-trigger in the OUTPUT row** of PUT/adjust-stock responses (same as #4/#15); a later GET shows the bumped value.
 30. **Unrun T-SQL, new bits:** `UPDATE ... SET stock_qty = stock_qty + ? OUTPUT ... INTO @o WHERE id = ? AND org_id = ? AND stock_qty + ? >= 0` with the delta bound twice as int parameters; inline `CHECK` on a column that also has a `DEFAULT` constraint; `bit` returned by pyodbc as Python bool (the tests accept True/1).
+
+## Added in slice F2 (customers)
+
+31. **Delete customer with sales = 409** (not detach). Why unsure: the brief allowed either. Assumed 409 is safer (no silent rewrite of sales, single atomic
+    statement). Consequence: the user must unlink sales first (PUT sale `customer_id: null`); if you prefer detach-on-delete, change `_DELETE` to a two-statement transaction.
+32. **Composite FK `(customer_id, org_id) -> customers(id, org_id)`** instead of a plain FK to `customers(id)`. Why unsure: the brief said FK to customers(id); the composite also gives DB-level tenant integrity,
+    needs the extra `UQ_customers_id_org`, and is unrun T-SQL (same pattern as `agent_logs`).
+33. **Filtered unique index needs SET options** (QUOTED_IDENTIFIER ON, ANSI_NULLS ON, ...) on every writing connection; pyodbc's defaults satisfy that, but a client that turns QUOTED_IDENTIFIER OFF would get error 1934. Unverified here.
+34. **`CASE WHEN ? = 1 THEN ? ELSE col END` with bound parameters** (customers update; `CAST(? AS uniqueidentifier)` in sales update) is unrun T-SQL; pyodbc binds the flag as int and NULL as an untyped null. If SSMS/pyodbc complains about type inference, add explicit `CAST(? AS nvarchar(n))`.
+35. **A sale created for a customer that is deleted a moment later** (race between the ownership check and the INSERT) fails on the FK (547) and surfaces as HTTP 500, not 404. Assumed rare enough; map 547 -> 404/409 if it matters.
+36. **Email validation is deliberately minimal** (contains `@`, no whitespace, <= 320). Phones are free text (<= 32), compared case-insensitively and exactly (`+49 170` and `+49170` are different customers).
+37. **`PUT /sales` behaviour change**: the router now passes only the fields the client sent (`exclude_unset`). Explicit `null` for amount/category/description/customer_name is still ignored as before; only `customer_id: null` means "unlink".
+38. **Search is prefix-only** (`q%`), not contains, so it can use an index later; the UI searches server-side (250 ms debounce, limit 200). Switch to `%q%` if substring matching is wanted (escaping already handles it).
+39. **`updated_at` in PUT customer responses is pre-trigger** (same as #4/#15/#29).

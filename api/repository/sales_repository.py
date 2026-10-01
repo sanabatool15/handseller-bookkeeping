@@ -13,17 +13,17 @@ _OUT_DECL = (
     "SET NOCOUNT ON; "
     "DECLARE @o TABLE (id uniqueidentifier, org_id uniqueidentifier, created_by uniqueidentifier, "
     "amount decimal(14,2), category nvarchar(100), customer_name nvarchar(200), description nvarchar(max), "
-    "sale_date date, created_at datetimeoffset, updated_at datetimeoffset); "
+    "sale_date date, customer_id uniqueidentifier, created_at datetimeoffset, updated_at datetimeoffset); "
 )
 _OUT_COLS = (
     "OUTPUT INSERTED.id, INSERTED.org_id, INSERTED.created_by, INSERTED.amount, INSERTED.category, "
-    "INSERTED.customer_name, INSERTED.description, INSERTED.sale_date, INSERTED.created_at, INSERTED.updated_at INTO @o "
+    "INSERTED.customer_name, INSERTED.description, INSERTED.sale_date, INSERTED.customer_id, INSERTED.created_at, INSERTED.updated_at INTO @o "
 )
 _INSERT = (
     _OUT_DECL
-    + "INSERT INTO sales (org_id, created_by, amount, category, customer_name, description, sale_date) "
+    + "INSERT INTO sales (org_id, created_by, amount, category, customer_name, description, sale_date, customer_id) "
     + _OUT_COLS
-    + "VALUES (?, ?, ?, ?, ?, ?, ?); SELECT * FROM @o;"
+    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?); SELECT * FROM @o;"
 )
 _LIST = (
     "SELECT * FROM sales WHERE org_id = ? "
@@ -35,11 +35,13 @@ _LIST_MONTH = (
 )
 _GET_SCOPED = "SELECT TOP (1) * FROM sales WHERE id = ? AND org_id = ?"
 # Updates never set a column to NULL (the service strips None values), so COALESCE(?, col) keeps the
-# statement fully static: no SQL is built from the keys of `updates`.
+# statement fully static: no SQL is built from the keys of `updates`. customer_id is the exception: a PRESENT
+# key (even None) is written, so a sale can be unlinked from its customer (flag 1 = set, 0 = leave).
 _UPDATE = (
     _OUT_DECL
     + "UPDATE sales SET amount = COALESCE(?, amount), category = COALESCE(?, category), "
-    + "customer_name = COALESCE(?, customer_name), description = COALESCE(?, description) "
+    + "customer_name = COALESCE(?, customer_name), description = COALESCE(?, description), "
+    + "customer_id = CASE WHEN ? = 1 THEN CAST(? AS uniqueidentifier) ELSE customer_id END "
     + _OUT_COLS
     + "WHERE id = ? AND org_id = ?; SELECT * FROM @o;"
 )
@@ -52,15 +54,15 @@ _SUM_BY_CATEGORY = (
     "SELECT category, SUM(amount) AS total FROM sales "
     "WHERE org_id = ? AND sale_date >= ? AND sale_date < ? GROUP BY category"
 )
-_UPDATABLE = ("amount", "category", "customer_name", "description")
+_UPDATABLE = ("amount", "category", "customer_name", "description", "customer_id")
 
 
 def _money(amount: float) -> Decimal:
     return Decimal(str(round(float(amount), 2)))
 
 
-def create_sale(db: Db, *, org_id: str, created_by: str, amount: float, category: str, description: str | None, customer_name: str | None) -> dict[str, Any]:
-    row = db.query_one(_INSERT, (org_id, created_by, _money(amount), category, customer_name, description, today_utc()))
+def create_sale(db: Db, *, org_id: str, created_by: str, amount: float, category: str, description: str | None, customer_name: str | None, customer_id: str | None = None) -> dict[str, Any]:
+    row = db.query_one(_INSERT, (org_id, created_by, _money(amount), category, customer_name, description, today_utc(), customer_id))
     if row is None:
         raise RuntimeError("Failed to create sale")
     return row
@@ -90,6 +92,8 @@ def update_sale_scoped(db: Db, *, sale_id: str, org_id: str, updates: dict[str, 
         updates.get("category"),
         updates.get("customer_name"),
         updates.get("description"),
+        1 if "customer_id" in updates else 0,
+        updates.get("customer_id"),
         sale_id,
         org_id,
     )

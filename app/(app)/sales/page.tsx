@@ -2,11 +2,13 @@
 
 import { Receipt, TrendingUp, Hash } from "lucide-react";
 import { useLedger } from "@/lib/use-ledger";
+import { useCustomers } from "@/lib/use-customers";
 import { LedgerTable } from "@/components/ledger-table";
 import { KpiCard } from "@/components/kpi-card";
 
 export default function SalesPage() {
   const { entries, loading, create, update, remove } = useLedger("sales");
+  const { customers } = useCustomers(); // optional dropdown; a failed load just leaves it empty
   const total = entries.reduce((sum, e) => sum + e.amount, 0);
 
   return (
@@ -35,6 +37,7 @@ export default function SalesPage() {
         onCreate={create}
         onUpdate={update}
         onDelete={remove}
+        customers={customers}
       />
     </div>
   );
