@@ -21,7 +21,7 @@ ai_agents/     (renamed from agents/ — see "Package-name collisions, fixed" be
   rules/       Deterministic rule-based fallback (works fully offline)
   tools/       Utility functions (web search, deep-link generation)
 core/          FastAPI app wiring, settings, SQL Server (`db.py`, `clients.py`)/Redis clients, JWT
-../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql (+ TEST_CASES.md)
+../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql, 03_products.sql (+ TEST_CASES.md)
 sql/           LEGACY Postgres/Supabase schema, kept for reference only (no longer used)
 tests/
   unit/        Mocked DB (in-memory fake) + fakeredis
@@ -50,6 +50,17 @@ Security** (the application-layer `org_id` scoping below is the control). `agent
 Manual checks: `../sql_server/TEST_CASES.md`. Details: `specs/13-sql-server-migration.md`.
 
 > **Annotation:** `sql/schema.sql` is the old Supabase/Postgres schema (with RLS); it is no longer applied.
+
+## Products & stock endpoints (slice F1, `../sql_server/03_products.sql`)
+
+All require auth; `POST`/`PUT` require `Idempotency-Key`. Cross-tenant ids return 404. Details: `specs/14-inventory-and-cash-domain.md`.
+
+| Endpoint | Notes |
+|---|---|
+| `POST /products` | 201. Body `name`, `sku`, `price` (>= 0), optional `stock_qty` (>= 0), `reorder_level` (>= 0). 422 invalid, 409 duplicate SKU in the org |
+| `GET /products?limit=&offset=&low_stock=true` | ordered by name; `low_stock` = `stock_qty <= reorder_level` |
+| `GET/PUT/DELETE /products/{id}` | PUT updates `name`, `sku`, `price`, `reorder_level`, `is_active` (never stock); 409 on SKU clash |
+| `POST /products/{id}/adjust-stock` | body `{delta: int != 0, reason?: str}`; one atomic guarded `UPDATE`; 409 if stock would go negative, 404 unknown/other org |
 
 ## Structural multi-tenancy (critical)
 
@@ -268,7 +279,7 @@ Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 ### SQL Server environment variables (see `specs/13-sql-server-migration.md`)
 
 Everything (auth, sales, expenses, agent jobs/logs, Inngest job steps, MCP server, agent tools) runs on
-SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` in SSMS first, then set either
+SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql` in SSMS first, then set either
 `MSSQL_CONNECTION_STRING` (full ODBC string) or `MSSQL_SERVER`, `MSSQL_DATABASE` (default
 `HandsellerDB`), `MSSQL_USER`/`MSSQL_PASSWORD` (empty user = Windows auth), `MSSQL_DRIVER`
 (default `ODBC Driver 18 for SQL Server`), `MSSQL_TRUST_SERVER_CERTIFICATE`. Requires the

@@ -19,7 +19,7 @@ from core.clients import close_clients, get_redis
 from core.config import get_settings
 from middleware.auth import AuthMiddleware
 from middleware.idempotency import IdempotencyMiddleware
-from routers import agent_jobs_router, auth_router, expenses_router, sales_router
+from routers import agent_jobs_router, auth_router, expenses_router, products_router, sales_router
 from services import health_service
 
 logging.basicConfig(level=get_settings().log_level)
@@ -104,6 +104,7 @@ async def health():
 app.include_router(auth_router.router)
 app.include_router(sales_router.router)
 app.include_router(expenses_router.router)
+app.include_router(products_router.router)
 app.include_router(agent_jobs_router.router)
 
 # --- Inngest FastAPI handler mount ---

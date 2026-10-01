@@ -72,3 +72,27 @@ export interface AgentJob {
   created_at: string;
   updated_at: string;
 }
+
+export interface Product {
+  id: string;
+  org_id: string;
+  created_by: string | null;
+  name: string;
+  sku: string;
+  price: number;
+  stock_qty: number;
+  reorder_level: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProductInput {
+  name: string;
+  sku: string;
+  price: number;
+  // Initial stock: only used on create. Later changes go through adjust-stock.
+  stock_qty?: number;
+  reorder_level?: number;
+  is_active?: boolean;
+}

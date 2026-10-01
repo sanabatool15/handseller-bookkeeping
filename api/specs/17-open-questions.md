@@ -46,3 +46,14 @@
 20. **e2e suites (tests/e2e/prompt-2..5, test_full_inngest_workflow.py):** conftests/helpers were ported to SQL (`tests/e2e/e2e_db.py`) but never run against a real SQL Server/Redis/Inngest. prompt-2/3 are not RUN_E2E-gated (they error out without infra, as before); prompt-4/5 are gated. `tests/e2e/prompt-N/*.md` result/scenario docs still describe Supabase runs (historical). The Dockerfile/docker-compose were deliberately not touched (no Docker work in this migration), so `docker compose up` has no SQL Server and no ODBC driver in the image.
 21. **`api/sql/schema.sql` kept** as the legacy Postgres reference (not deleted); nothing reads it.
 22. **Pre-existing test bug fixed:** `tests/e2e/prompt-1/test_financial_advice_job_journey.py` called `_step_run_agent` with a stale signature (failing before F0b); it now passes `requested_by`/`question` and forces the rule-based fallback.
+
+## Added in slice F1 (products & stock)
+
+23. **`reason` on adjust-stock is not persisted.** Why unsure: the brief asks for `reason: str|null` but only the `products` table exists. Assumed: validate (<= 500 chars) and ignore until a `stock_movements` table (audit trail) is added in a later slice.
+24. **Hard DELETE of products.** Why unsure: once sales/line items reference products, a hard delete would orphan or violate FKs. Assumed: fine for now (no references exist); `is_active` is there for a future soft-delete switch.
+25. **Quantity cap of 1,000,000** (initial stock, delta, reorder level) is my choice, to prevent int overflow in `stock_qty + delta`. Adjust if the business needs bigger numbers (then widen the column to bigint).
+26. **SKU uniqueness is case-insensitive** (default SQL Server collation) and whitespace is trimmed by the service, so `abc` and `ABC ` collide. Assumed desirable.
+27. **`low_stock` = `stock_qty <= reorder_level`**, applied to inactive products too. Assumed acceptable.
+28. **Stock/price edits via `PUT`:** `PUT` cannot change `stock_qty` (use adjust-stock) and cannot set a column to NULL (same COALESCE convention as sales). `is_active=false` is accepted but nothing filters on it yet.
+29. **`updated_at` is pre-trigger in the OUTPUT row** of PUT/adjust-stock responses (same as #4/#15); a later GET shows the bumped value.
+30. **Unrun T-SQL, new bits:** `UPDATE ... SET stock_qty = stock_qty + ? OUTPUT ... INTO @o WHERE id = ? AND org_id = ? AND stock_qty + ? >= 0` with the delta bound twice as int parameters; inline `CHECK` on a column that also has a `DEFAULT` constraint; `bit` returned by pyodbc as Python bool (the tests accept True/1).

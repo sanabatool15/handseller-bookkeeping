@@ -30,8 +30,9 @@ class FakeSqlStore:
         self.expenses: dict[str, dict[str, Any]] = {}
         self.agent_jobs: dict[str, dict[str, Any]] = {}
         self.agent_logs: dict[str, dict[str, Any]] = {}
+        self.products: dict[str, dict[str, Any]] = {}
 
-    _TABLES = ("users", "orgs", "sales", "expenses", "agent_jobs", "agent_logs")
+    _TABLES = ("users", "orgs", "sales", "expenses", "agent_jobs", "agent_logs", "products")
 
     def snapshot(self):
         return copy.deepcopy({t: getattr(self, t) for t in self._TABLES})
@@ -205,6 +206,73 @@ def build_expenses_fakes(store: FakeSqlStore) -> dict[str, Any]:
     return fakes
 
 
+def build_products_fakes(store: FakeSqlStore) -> dict[str, Any]:
+    """Fakes for products. Like the DB: id AND org_id scoping, UNIQUE (org_id, sku) (=> DuplicateRecordError),
+    CHECK stock_qty >= 0 / price >= 0 / reorder_level >= 0 (=> IntegrityError-like AssertionError), and an
+    adjust that only applies when stock + delta >= 0 (the WHERE guard of the real statement)."""
+    def _check(row: dict) -> None:
+        if row["stock_qty"] < 0 or row["price"] < 0 or row["reorder_level"] < 0:
+            raise AssertionError("CHECK constraint violated (547)")
+
+    def _sku_taken(org_id: str, sku: str, except_id: str | None = None) -> bool:
+        return any(r["org_id"] == org_id and r["sku"].lower() == sku.lower() and r["id"] != except_id  # CI collation
+                   for r in store.products.values())
+
+    def create_product(db, *, org_id, created_by, name, sku, price, stock_qty, reorder_level) -> dict:
+        if _sku_taken(org_id, sku):
+            raise DuplicateRecordError("duplicate (org_id, sku) (2627)")
+        row = {"id": str(uuid.uuid4()), "org_id": org_id, "created_by": created_by, "name": name, "sku": sku,
+               "price": float(price), "stock_qty": int(stock_qty), "reorder_level": int(reorder_level),
+               "is_active": True, "created_at": _now(), "updated_at": _now()}
+        _check(row)
+        store.products[row["id"]] = row
+        return dict(row)
+
+    def list_products(db, *, org_id, limit=100, offset=0, low_stock=False) -> list[dict]:
+        limit, offset = repo_base.clamp_page(limit, offset)
+        mine = [r for r in store.products.values() if r["org_id"] == org_id
+                and (not low_stock or r["stock_qty"] <= r["reorder_level"])]
+        mine.sort(key=lambda r: (r["name"], r["id"]))
+        return [dict(r) for r in mine[offset:offset + limit]]
+
+    def get_product_scoped(db, *, product_id, org_id) -> Optional[dict]:
+        r = store.products.get(product_id)
+        return dict(r) if r and r["org_id"] == org_id else None
+
+    def update_product_scoped(db, *, product_id, org_id, updates) -> Optional[dict]:
+        allowed = {"name", "sku", "price", "reorder_level", "is_active"}
+        if set(updates) - allowed:
+            raise ValueError(f"cannot update columns: {sorted(set(updates) - allowed)}")
+        r = store.products.get(product_id)
+        if not r or r["org_id"] != org_id:
+            return None
+        if updates.get("sku") is not None and _sku_taken(org_id, updates["sku"], except_id=product_id):
+            raise DuplicateRecordError("duplicate (org_id, sku) (2627)")
+        candidate = {**r, **{k: v for k, v in updates.items() if v is not None}}
+        candidate["price"] = float(candidate["price"])
+        _check(candidate)
+        r.update(candidate)
+        r["updated_at"] = _now()
+        return dict(r)
+
+    def delete_product_scoped(db, *, product_id, org_id) -> bool:
+        r = store.products.get(product_id)
+        if not r or r["org_id"] != org_id:
+            return False
+        del store.products[product_id]
+        return True
+
+    def adjust_stock_scoped(db, *, product_id, org_id, delta) -> Optional[dict]:
+        r = store.products.get(product_id)
+        if not r or r["org_id"] != org_id or r["stock_qty"] + int(delta) < 0:
+            return None
+        r["stock_qty"] += int(delta)
+        r["updated_at"] = _now()
+        return dict(r)
+
+    return {k: v for k, v in locals().items() if callable(v) and k not in ("store", "_check", "_sku_taken")}
+
+
 def build_agent_jobs_fakes(store: FakeSqlStore) -> dict[str, Any]:
     def create_job(db, *, job_name, org_id, requested_by, input_payload=None) -> dict:
         row = {"id": str(uuid.uuid4()), "job_name": job_name, "org_id": org_id, "requested_by": requested_by,
@@ -250,7 +318,7 @@ def build_agent_jobs_fakes(store: FakeSqlStore) -> dict[str, Any]:
 
 def build_ownership_fake(store: FakeSqlStore):
     def get_ownership(db, *, table: str, record_id: str, org_id: str) -> bool:
-        if table not in ("users", "sales", "expenses", "agent_jobs"):
+        if table not in ("users", "sales", "expenses", "agent_jobs", "products"):
             raise repo_base.RepositoryError(f"ownership check not supported for table {table!r}")
         r = getattr(store, table).get(record_id)
         return bool(r and r.get("org_id") == org_id)
@@ -260,12 +328,14 @@ def build_ownership_fake(store: FakeSqlStore):
 
 def install_fake_repos(monkeypatch, store: FakeSqlStore) -> None:
     from repository import (agent_jobs_repository, expenses_repository, health_repository, orgs_repository,
-                            sales_repository, users_repository)
+                            products_repository, sales_repository, users_repository)
 
     for name, fn in build_sales_fakes(store).items():
         monkeypatch.setattr(sales_repository, name, fn)
     for name, fn in build_expenses_fakes(store).items():
         monkeypatch.setattr(expenses_repository, name, fn)
+    for name, fn in build_products_fakes(store).items():
+        monkeypatch.setattr(products_repository, name, fn)
     for name, fn in build_agent_jobs_fakes(store).items():
         monkeypatch.setattr(agent_jobs_repository, name, fn)
     monkeypatch.setattr(repo_base, "get_ownership", build_ownership_fake(store))

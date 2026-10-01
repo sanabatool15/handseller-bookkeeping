@@ -10,6 +10,7 @@ import pytest
 
 from repository import agent_jobs_repository as jobs_repo
 from repository import expenses_repository as exp_repo
+from repository import products_repository as prod_repo
 from repository import sales_repository as sales_repo
 
 
@@ -117,3 +118,44 @@ def test_update_job_status_params():
     jobs_repo.update_job_status(db, job_id="j1", org_id="o1", status="completed", current_step="finalize", result={"r": 1})
     p = db.calls[0][1]
     assert p[0] == "completed" and p[1] == "finalize" and json.loads(p[2]) == {"r": 1} and p[3] is None and p[-2:] == ("j1", "o1")
+
+
+def test_create_product_params_and_output_into():
+    db = RecDb([{"id": "p1"}])
+    prod_repo.create_product(db, org_id="o1", created_by="u1", name="Mug", sku="S", price=9.99, stock_qty=3, reorder_level=1)
+    sql, p = db.calls[0]
+    assert "OUTPUT" in sql and "INTO @o" in sql and "SELECT * FROM @o" in sql
+    assert p == ("o1", "u1", "Mug", "S", decimal.Decimal("9.99"), 3, 1)
+
+
+def test_product_scoped_statements_send_id_then_org_id():
+    db = RecDb([{"id": "p1"}])
+    prod_repo.get_product_scoped(db, product_id="p1", org_id="o1")
+    assert db.calls[-1][1] == ("p1", "o1")
+    prod_repo.update_product_scoped(db, product_id="p1", org_id="o1", updates={"price": 5.0, "is_active": False})
+    sql, p = db.calls[-1]
+    assert "WHERE id = ? AND org_id = ?" in sql and "SET name = COALESCE" in sql and "stock_qty = " not in sql
+    assert p == (None, None, decimal.Decimal("5.0"), None, 0, "p1", "o1")
+    assert prod_repo.delete_product_scoped(db, product_id="p1", org_id="o1") is True
+    assert prod_repo.delete_product_scoped(RecDb(rowcount=0), product_id="p1", org_id="o2") is False
+    with pytest.raises(ValueError):
+        prod_repo.update_product_scoped(RecDb(), product_id="p", org_id="o", updates={"stock_qty": 99})
+
+
+def test_adjust_stock_is_single_guarded_statement():
+    db = RecDb([{"id": "p1", "stock_qty": 4}])
+    assert prod_repo.adjust_stock_scoped(db, product_id="p1", org_id="o1", delta=-3)["stock_qty"] == 4
+    assert len(db.calls) == 1  # exactly one round trip, no read-then-write
+    sql, p = db.calls[0]
+    assert "stock_qty = stock_qty + ?" in sql and "WHERE id = ? AND org_id = ? AND stock_qty + ? >= 0" in sql
+    assert "INTO @o" in sql and p == (-3, "p1", "o1", -3)
+    assert prod_repo.adjust_stock_scoped(RecDb([]), product_id="p1", org_id="o1", delta=-99) is None
+
+
+def test_product_listing_low_stock_variant_and_paging():
+    db = RecDb()
+    prod_repo.list_products(db, org_id="o1", limit=0, offset=-1)
+    assert "OFFSET ? ROWS FETCH NEXT ? ROWS ONLY" in db.calls[0][0] and "stock_qty <= reorder_level" not in db.calls[0][0]
+    assert db.calls[0][1] == ("o1", 0, 1)
+    prod_repo.list_products(db, org_id="o1", limit=10, offset=20, low_stock=True)
+    assert "stock_qty <= reorder_level" in db.calls[1][0] and db.calls[1][1] == ("o1", 20, 10)

@@ -17,7 +17,7 @@ import re
 import pytest
 
 REPO_DIR = pathlib.Path(__file__).resolve().parents[2] / "repository"
-TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs"}
+TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs", "products"}
 ROOT_TABLES = {"orgs"}
 SQL_START = re.compile(r"^\s*(/\*.*?\*/\s*)?(SET\s+NOCOUNT|DECLARE|SELECT|INSERT|UPDATE|DELETE|WITH|MERGE)\b", re.I | re.S)
 TABLE_REF = re.compile(r"\b(?:FROM|JOIN|UPDATE|INTO|DELETE\s+FROM)\s+(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)", re.I)
@@ -139,14 +139,14 @@ def test_by_id_statements_include_org_id():
 def test_guard_sees_sql_in_dicts_and_new_repositories():
     """The guard must cover the F0b repositories and dict-held SQL (base._OWNERSHIP_SQL)."""
     seen = {p.name for p, _, sql, _ in _all() if sql}
-    assert {"sales_repository.py", "expenses_repository.py", "agent_jobs_repository.py", "base.py"} <= seen
+    assert {"sales_repository.py", "expenses_repository.py", "agent_jobs_repository.py", "products_repository.py", "base.py"} <= seen
     base_sql = [sql for p, _, sql, _ in _all() if p.name == "base.py" and sql]
     assert any("FROM sales WHERE id = ? AND org_id = ?" in q for q in base_sql)
 
 
 def test_every_tenant_table_has_a_repository_statement_with_org_id():
     text = " ".join(sql for _, _, sql, _ in _all() if sql)
-    for table in ("sales", "expenses", "agent_jobs", "agent_logs"):
+    for table in ("sales", "expenses", "agent_jobs", "agent_logs", "products"):
         assert re.search(rf"\b{table}\b[^;]*\borg_id\b", text, re.I), table
 
 
@@ -166,3 +166,12 @@ def test_no_sql_outside_repository():
             if re.search(r"\bdb\.(query|query_one|execute)\(", p.read_text()):
                 offenders.append(str(p.relative_to(root)))
     assert not offenders, offenders
+
+
+def test_products_adjust_stock_is_one_guarded_statement():
+    """The race-safe adjust: one UPDATE with id, org_id AND the non-negative guard in the same statement."""
+    sql = {s for p, _, s, _ in _all() if p.name == "products_repository.py" and s and "stock_qty = stock_qty + ?" in s}
+    assert len(sql) == 1
+    stmt = next(iter(sql))
+    assert re.search(r"WHERE id = \? AND org_id = \? AND stock_qty \+ \? >= 0", stmt)
+    assert "INTO @o" in stmt

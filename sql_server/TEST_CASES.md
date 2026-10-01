@@ -122,3 +122,73 @@ Pass: yes.
 Steps: `RUN_MSSQL=1 pytest tests/sqlserver -v` from `api/`.
 Expected: 3 tests from F0a + 8 from F0b (`test_ledger_sqlserver.py`) pass (11 total).
 Pass: all green; tests clean up their own orgs/users (`mssql-test-*`).
+
+## Slice F1: products & stock
+
+Requires `03_products.sql` (run after 01 and 02). `<ORG>`/`<ORG_B>` = ids of two registered orgs, `<USER>` a user of `<ORG>`.
+
+### F1-01 Script runs and is re-runnable
+Steps: open `03_products.sql` in SSMS, Execute, Execute again.
+Expected: no errors either time; `SELECT name FROM sys.tables WHERE name='products'` returns a row;
+`SELECT name FROM sys.indexes WHERE object_id=OBJECT_ID('dbo.products')` lists `PK_products`, `UQ_products_org_sku`, `idx_products_org_id`;
+`SELECT name FROM sys.triggers` lists `trg_products_updated_at`.
+Pass: all present.
+
+### F1-02 CHECK constraints (stock, price, reorder level)
+Steps: `INSERT products(org_id,name,sku,price,stock_qty) VALUES(<ORG>,N'a',N'S1',1,-1);`, then `...price=-1...`, then `...,reorder_level) ... -1`.
+Also insert a valid row (`stock_qty=5`) and `UPDATE products SET stock_qty = -1 WHERE sku=N'S1' AND org_id=<ORG>`.
+Expected: each bad statement fails with error 547 (`CK_products_stock_qty` / `CK_products_price` / `CK_products_reorder_level`); the row keeps stock 5.
+Pass: four 547 errors; no negative values in the table.
+
+### F1-03 Unique SKU per org
+Steps: insert `(<ORG>, N'a', N'DUP', 1)` twice; then insert `(<ORG_B>, N'a', N'DUP', 1)`.
+Expected: second insert fails with 2627 (`UQ_products_org_sku`); the insert for `<ORG_B>` succeeds. Collation is case-insensitive: `N'dup'` in `<ORG>` also fails.
+Pass: as described.
+
+### F1-04 updated_at trigger
+Steps: insert a product; `WAITFOR DELAY '00:00:01'`; `UPDATE products SET name=N'b' WHERE sku=N'S1' AND org_id=<ORG>`; select `created_at, updated_at`.
+Expected: `updated_at` > `created_at`. Pass: yes.
+
+### F1-05 Create / list / get / update / delete via API (JSON shape)
+Steps: `POST /products {"name":"Mug","sku":"MUG-1","price":12.5,"stock_qty":4,"reorder_level":2}` with `Idempotency-Key`; then `GET /products`, `GET /products/{id}`,
+`PUT /products/{id} {"price": 15, "is_active": false}`, `DELETE /products/{id}`.
+Expected: 201; `id`/`org_id`/`created_by` strings; `price` a JSON number (12.5), `stock_qty`/`reorder_level` integers, `is_active` a boolean (not 0/1),
+`created_at`/`updated_at` ISO strings; PUT keeps `stock_qty` unchanged (note: `updated_at` in the PUT response is pre-trigger); DELETE 204 then GET 404.
+Pass: yes, and `SELECT * FROM products` shows the row with `org_id = <ORG>`, `created_by = <USER>`.
+
+### F1-06 Validation => 422, duplicate => 409
+Steps: `POST /products` with empty `name`, empty `sku`, `price: -1`, `reorder_level: -1`, `stock_qty: -1`; post the same SKU twice; `PUT` a product's `sku` to another product's SKU.
+Expected: 422 for each invalid body; 409 `SKU 'MUG-1' already exists` for the duplicate create and for the clashing PUT; the same SKU as another org is accepted (201).
+Pass: yes.
+
+### F1-07 Adjust stock: success, insufficient (409), not found (404)
+Steps: product with stock 5: `POST /products/{id}/adjust-stock {"delta": 3, "reason": "restock"}`; `{"delta": -8}`; `{"delta": -1}`; `{"delta": 0}`; unknown id.
+Expected: 200 stock 8; 200 stock 0 (exactly to zero is allowed); 409 "Insufficient stock..."; 422 (zero delta); 404. Stock stays 0 after the 409.
+Pass: yes. (`reason` is accepted but not stored yet: specs/17.)
+
+### F1-08 Adjust stock is race-safe
+Steps: product with stock 9. From two SSMS windows (or `RUN_MSSQL=1 pytest tests/sqlserver/test_products_sqlserver.py -k race`), run concurrently the statement
+`UPDATE products SET stock_qty = stock_qty + -1 WHERE id=<ID> AND org_id=<ORG> AND stock_qty + -1 >= 0;` repeatedly (12 times in total across sessions).
+Expected: exactly 9 statements report 1 row affected, 3 report 0; final `stock_qty` = 0, never negative.
+Pass: yes (the pytest version asserts this with 12 threads).
+
+### F1-09 Low-stock filter
+Steps: products (stock/reorder) 1/2, 2/2, 3/2; `GET /products?low_stock=true`.
+Expected: only the first two (stock <= reorder level); `GET /products` returns all three, ordered by name.
+Pass: yes.
+
+### F1-10 Tenant isolation => 404
+Steps: with org B's token call `GET/PUT/DELETE /products/{A's id}` and `POST /products/{A's id}/adjust-stock {"delta": 1}` and `{"delta": -1}`; `GET /products`.
+Expected: always 404 (never 403/200/409); A's product unchanged; B's list is `[]`.
+Pass: yes.
+
+### F1-11 Missing Idempotency-Key and replay
+Steps: `POST /products` and `POST .../adjust-stock` without the header; then `adjust-stock {"delta": 5}` twice with the SAME key.
+Expected: 400 for missing key; the replay returns the cached response and stock only increases by 5 once.
+Pass: yes.
+
+### F1-12 Automated DB tests
+Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_products_sqlserver.py -v` from `api/`.
+Expected: 6 tests pass (constraints, unique-per-org, JSON shape/trigger, isolation, adjust edge cases, 12-thread race).
+Pass: all green; tests clean up their own orgs/users/products.
+

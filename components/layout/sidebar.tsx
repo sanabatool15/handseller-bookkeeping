@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   Receipt,
   Wallet,
+  Package,
   Sparkles,
   Settings,
   LogOut,
@@ -18,6 +19,7 @@ const NAV = [
   { href: "/advisor", label: "AI Agent Advisor", icon: Sparkles },
   { href: "/sales", label: "Sales", icon: Receipt },
   { href: "/expenses", label: "Expenses", icon: Wallet },
+  { href: "/products", label: "Products", icon: Package },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
