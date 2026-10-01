@@ -13,6 +13,8 @@ from repository import customers_repository as cust_repo
 from repository import expenses_repository as exp_repo
 from repository import products_repository as prod_repo
 from repository import sales_repository as sales_repo
+from repository import txn_log_repository as log_repo
+from repository import db_lab_repository as lab_repo
 
 
 @pytest.fixture(autouse=True)
@@ -423,3 +425,72 @@ def test_foreign_key_violation_is_mapped_but_check_violation_is_not():
     with pytest.raises(Exception) as e:
         prod_repo.delete_product_scoped(Db(Conn(chk)), product_id="p1", org_id="o1")
     assert not isinstance(e.value, ForeignKeyViolationError)
+
+
+# ---- F5 ------------------------------------------------------------------------------------------------------------
+def test_txn_log_insert_sends_org_id_then_json_events_in_order():
+    db = RecDb(rowcount=3)
+    events = [{"request_id": "r1", "operation": "record_sale", "step": s, "isolation_level": "READ COMMITTED", "status": "x",
+               "error_number": None, "message": "m", "duration_ms": None, "retry_no": 0, "created_at": "2026-01-01T00:00:00.123456"}
+              for s in ("txn_started", "lock_wait_suspected", "committed")]
+    assert log_repo.insert_events(db, org_id="ORG", events=events) == 3
+    sql, params = db.calls[0]
+    assert params[0] == "ORG" and len(params) == 2
+    sent = json.loads(params[1])
+    assert [e["seq"] for e in sent] == [0, 1, 2] and [e["step"] for e in sent] == ["txn_started", "lock_wait_suspected", "committed"]
+    assert "?" in sql and "ORG" not in sql
+    assert log_repo.insert_events(db, org_id="ORG", events=[]) == 0 and len(db.calls) == 1
+
+
+def test_txn_log_insert_rejects_unknown_steps_before_sending_anything():
+    db = RecDb()
+    with pytest.raises(ValueError):
+        log_repo.insert_events(db, org_id="ORG", events=[{"step": "drop_table"}])
+    assert db.calls == []
+
+
+def test_txn_log_list_params_org_first_filters_doubled_then_paging():
+    db = RecDb()
+    log_repo.list_events(db, org_id="ORG", request_id="r1", step="committed", limit=5, offset=10)
+    sql, params = db.calls[0]
+    assert params == ("ORG", "r1", "r1", None, None, "committed", "committed", None, None, 10, 5)
+    assert "ORDER BY created_at DESC" in sql
+    log_repo.list_events(db, org_id="ORG", oldest_first=True, limit=0, offset=-5)
+    assert "ORDER BY created_at ASC" in db.calls[1][0] and db.calls[1][1][-2:] == (0, 1)  # clamped
+    log_repo.list_requests(db, org_id="ORG", outcome="committed", operation="void_sale", limit=7, offset=2)
+    assert db.calls[2][1] == ("ORG", None, None, "void_sale", "void_sale", "committed", "committed", 2, 7)
+
+
+def test_lab_wait_uses_only_the_fixed_literals():
+    db = RecDb()
+    lab_repo.wait(db, 0)
+    assert db.calls == []
+    lab_repo.wait(db, 3)
+    assert db.calls == [("WAITFOR DELAY '00:00:03'", ())]
+    for bad in (6, -1, 1.5, "1", "1; DROP TABLE products", None, True):
+        with pytest.raises(ValueError):
+            lab_repo.wait(db, bad)  # type: ignore[arg-type]
+    assert len(db.calls) == 1
+
+
+def test_lab_statements_are_scoped_and_parameterised():
+    db = RecDb(rows=[{"stock_qty": 4}])
+    assert lab_repo.read_stock(db, org_id="O", product_id="P") == 4
+    lab_repo.write_stock(db, org_id="O", product_id="P", new_qty=3)
+    lab_repo.touch_stock(db, org_id="O", product_id="P", delta=-1)
+    lab_repo.safe_decrement(db, org_id="O", product_id="P", quantity=2)
+    assert [c[1] for c in db.calls] == [("P", "O"), (3, "P", "O"), (-1, "P", "O"), (2, "P", "O", 2)]
+
+
+def test_lab_prepare_session_validates_the_isolation_level_through_the_allow_list():
+    class Conn(RecDb):
+        def set_isolation_level(self, level):
+            from core.db import Db
+
+            Db.set_isolation_level(self, level)
+
+    db = Conn()
+    lab_repo.prepare_session(db, isolation_level="SERIALIZABLE", deadlock_low=True)
+    assert [c[0] for c in db.calls] == ["SET TRANSACTION ISOLATION LEVEL SERIALIZABLE", "SET LOCK_TIMEOUT 15000", "SET DEADLOCK_PRIORITY LOW"]
+    with pytest.raises(ValueError):
+        lab_repo.prepare_session(Conn(), isolation_level="READ COMMITTED; SHUTDOWN")

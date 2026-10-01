@@ -5,7 +5,8 @@ from pydantic import BaseModel, Field
 from core.db import Db
 
 from core.security import CurrentUser
-from routers.deps import get_current_user, get_db
+from routers.deps import DB, get_current_user, get_txn_recorder
+from services.txn_log_service import TxnRecorder
 from services import sales_service
 
 router = APIRouter(prefix="/sales", tags=["sales"])
@@ -36,10 +37,10 @@ class SaleUpdate(BaseModel):
 
 
 @router.post("", status_code=201)
-def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_user), db: Db = DB, recorder: TxnRecorder = Depends(get_txn_recorder)):
     try:
         return sales_service.create_sale(
-            db, org_id=user.org_id, user_id=user.user_id, amount=payload.amount,
+            db, org_id=user.org_id, user_id=user.user_id, on_event=recorder.on_event, amount=payload.amount,
             category=payload.category, description=payload.description, customer_name=payload.customer_name,
             customer_id=payload.customer_id, items=[i.model_dump() for i in payload.items] if payload.items else None,
             skip_invalid_items=payload.skip_invalid_items,
@@ -53,12 +54,12 @@ def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_use
 
 
 @router.get("")
-def list_sales(limit: int = 100, offset: int = 0, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def list_sales(limit: int = 100, offset: int = 0, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     return sales_service.list_sales(db, org_id=user.org_id, limit=limit, offset=offset)
 
 
 @router.get("/{sale_id}")
-def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     try:
         return sales_service.get_sale(db, org_id=user.org_id, sale_id=sale_id)
     except sales_service.NotFoundError as exc:
@@ -66,10 +67,10 @@ def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db
 
 
 @router.put("/{sale_id}")
-def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(get_current_user), db: Db = DB, recorder: TxnRecorder = Depends(get_txn_recorder)):
     try:
         return sales_service.update_sale(
-            db, org_id=user.org_id, sale_id=sale_id, updates=payload.model_dump(exclude_unset=True), user_id=user.user_id,
+            db, org_id=user.org_id, sale_id=sale_id, updates=payload.model_dump(exclude_unset=True), user_id=user.user_id, on_event=recorder.on_event,
         )
     except sales_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -78,8 +79,8 @@ def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(g
 
 
 @router.delete("/{sale_id}", status_code=204)
-def delete_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def delete_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db = DB, recorder: TxnRecorder = Depends(get_txn_recorder)):
     try:
-        sales_service.delete_sale(db, org_id=user.org_id, sale_id=sale_id, user_id=user.user_id)
+        sales_service.delete_sale(db, org_id=user.org_id, sale_id=sale_id, user_id=user.user_id, on_event=recorder.on_event)
     except sales_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

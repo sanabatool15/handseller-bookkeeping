@@ -8,6 +8,7 @@ from core.db import Db, run_with_deadlock_retry
 
 from repository import base as repo_base
 from repository import cash_repository, sales_repository
+from services.txn_log_service import report_rejected
 
 
 class ValidationError(Exception):
@@ -81,10 +82,11 @@ def create_sale(
             category=category or "general", description=description, amount=None if clean_items else amount,
             items=clean_items or None, skip_invalid_items=skip_invalid_items,
         ),
-        on_event=on_event,
+        on_event=on_event, operation="record_sale",
     )
     if outcome["status"] == "rolled_back":
         number, message = outcome["error_number"], outcome["message"]
+        report_rejected(on_event, operation="record_sale", error_number=number, message=message)
         if number == 50001:
             raise InsufficientStockError(message)
         if number == 50002:
@@ -132,8 +134,10 @@ def update_sale(
             lambda: cash_repository.adjust_entry_amount(
                 db, org_id=org_id, ref_type="sale", ref_id=sale_id, new_amount=new_amount, adjusted_by=user_id,
             ),
-            on_event=on_event,
+            on_event=on_event, operation="adjust_entry_amount",
         )
+        if result["status"] not in ("adjusted", "unchanged"):
+            report_rejected(on_event, operation="adjust_entry_amount", error_number=result.get("error_number"), message=result.get("message") or result["status"])
         if result["status"] == "not_found":
             raise NotFoundError("Sale not found")
         if result["status"] == "not_allowed":
@@ -149,7 +153,8 @@ def update_sale(
 def delete_sale(db: Db, *, org_id: str, sale_id: str, user_id: str | None = None, on_event: Callable[..., None] | None = None) -> None:
     """Void the sale (usp_VoidSale): stock back, reversing cash entry, sale deleted - all in one transaction."""
     result = run_with_deadlock_retry(
-        lambda: sales_repository.void_sale(db, org_id=org_id, sale_id=sale_id, voided_by=user_id), on_event=on_event,
+        lambda: sales_repository.void_sale(db, org_id=org_id, sale_id=sale_id, voided_by=user_id), on_event=on_event, operation="void_sale",
     )
     if result["status"] == "not_found":
+        report_rejected(on_event, operation="void_sale", error_number=50006, message="Sale not found")
         raise NotFoundError("Sale not found")

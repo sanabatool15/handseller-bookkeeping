@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from core.db import Db
 
 from core.security import CurrentUser
-from routers.deps import get_current_user, get_db
+from routers.deps import DB, get_current_user
 from services import customers_service
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -44,7 +44,7 @@ _DOMAIN_ERRORS = (
 
 
 @router.post("", status_code=201)
-def create_customer(payload: CustomerCreate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def create_customer(payload: CustomerCreate, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     try:
         return customers_service.create_customer(
             db, org_id=user.org_id, user_id=user.user_id, name=payload.name, phone=payload.phone,
@@ -55,7 +55,7 @@ def create_customer(payload: CustomerCreate, user: CurrentUser = Depends(get_cur
 
 
 @router.get("")
-def list_customers(limit: int = 100, offset: int = 0, q: str | None = None, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def list_customers(limit: int = 100, offset: int = 0, q: str | None = None, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     try:
         return customers_service.list_customers(db, org_id=user.org_id, limit=limit, offset=offset, q=q)
     except _DOMAIN_ERRORS as exc:
@@ -63,7 +63,7 @@ def list_customers(limit: int = 100, offset: int = 0, q: str | None = None, user
 
 
 @router.get("/{customer_id}/summary")
-def get_customer_summary(customer_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def get_customer_summary(customer_id: str, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     try:
         return customers_service.get_customer_summary(db, org_id=user.org_id, customer_id=customer_id)
     except _DOMAIN_ERRORS as exc:
@@ -71,7 +71,7 @@ def get_customer_summary(customer_id: str, user: CurrentUser = Depends(get_curre
 
 
 @router.get("/{customer_id}")
-def get_customer(customer_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def get_customer(customer_id: str, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     try:
         return customers_service.get_customer(db, org_id=user.org_id, customer_id=customer_id)
     except _DOMAIN_ERRORS as exc:
@@ -79,7 +79,7 @@ def get_customer(customer_id: str, user: CurrentUser = Depends(get_current_user)
 
 
 @router.put("/{customer_id}")
-def update_customer(customer_id: str, payload: CustomerUpdate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def update_customer(customer_id: str, payload: CustomerUpdate, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     try:
         # exclude_unset: only fields the client sent; an explicit null clears phone/email/address/notes.
         return customers_service.update_customer(db, org_id=user.org_id, customer_id=customer_id,
@@ -89,7 +89,7 @@ def update_customer(customer_id: str, payload: CustomerUpdate, user: CurrentUser
 
 
 @router.delete("/{customer_id}", status_code=204)
-def delete_customer(customer_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
+def delete_customer(customer_id: str, user: CurrentUser = Depends(get_current_user), db: Db = DB):
     try:
         customers_service.delete_customer(db, org_id=user.org_id, customer_id=customer_id)
     except _DOMAIN_ERRORS as exc:

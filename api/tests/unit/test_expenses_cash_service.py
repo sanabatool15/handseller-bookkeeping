@@ -160,7 +160,7 @@ def test_deadlock_on_expense_is_retried_once(fake_db, monkeypatch):
     monkeypatch.setattr(expenses_repository, "record_expense", flaky)
     events = []
     expenses_service.create_expense(fake_db, org_id=ORG, user_id="u", amount=5.0, category="c", on_event=lambda step, **i: events.append(step))
-    assert len(calls) == 2 and events == ["deadlock_retry"] and _balance(fake_db) == -5.0
+    assert len(calls) == 2 and [e for e in events if e.startswith("deadlock")] == ["deadlock_retry"] and _balance(fake_db) == -5.0
     assert is_deadlock(ProcedureError(1205, "x"))
 
 

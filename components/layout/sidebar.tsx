@@ -10,13 +10,16 @@ import {
   Package,
   Users,
   Sparkles,
+  Activity,
+  FlaskConical,
   Settings,
   LogOut,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useDbLabStatus } from "@/lib/use-db-lab";
 import { cn } from "@/lib/utils";
 
-const NAV = [
+const NAV: { href: string; label: string; icon: typeof Receipt; labOnly?: boolean }[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/advisor", label: "AI Agent Advisor", icon: Sparkles },
   { href: "/sales", label: "Sales", icon: Receipt },
@@ -24,12 +27,15 @@ const NAV = [
   { href: "/cash", label: "Cash", icon: Landmark },
   { href: "/products", label: "Products", icon: Package },
   { href: "/customers", label: "Customers", icon: Users },
+  { href: "/activity", label: "Activity", icon: Activity },
+  { href: "/db-lab", label: "DB Lab", icon: FlaskConical, labOnly: true },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { org, logout } = useAuth();
+  const labEnabled = useDbLabStatus(); // the DB Lab link only shows when the server has ENABLE_DB_LAB=true
 
   return (
     <aside className="flex h-screen w-64 flex-col justify-between border-l border-border bg-olive text-white">
@@ -43,7 +49,7 @@ export function Sidebar() {
           </p>
         </div>
         <nav className="flex flex-col gap-1 px-3">
-          {NAV.map(({ href, label, icon: Icon }) => {
+          {NAV.filter((n) => !n.labOnly || labEnabled === true).map(({ href, label, icon: Icon }) => {
             const active = pathname?.startsWith(href);
             return (
               <Link

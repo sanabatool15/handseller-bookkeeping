@@ -10,6 +10,7 @@ from typing import Any, Callable
 from core.db import Db, run_with_deadlock_retry
 
 from repository import cash_repository, expenses_repository
+from services.txn_log_service import report_rejected
 
 # decimal(14,2) maximum; larger values would overflow in SQL Server (HTTP 500), so they are rejected here (422).
 MAX_AMOUNT = 999_999_999_999.99
@@ -52,9 +53,10 @@ def create_expense(
             db, org_id=org_id, created_by=user_id, amount=amount, category=category or "general",
             voucher_reference=voucher_reference, description=description,
         ),
-        on_event=on_event,
+        on_event=on_event, operation="record_expense",
     )
     if outcome["status"] != "committed":
+        report_rejected(on_event, operation="record_expense", error_number=outcome.get("error_number"), message=outcome.get("message"))
         if outcome["error_number"] == 50005:
             raise NotFoundError("Organisation not found")
         raise ValidationError(outcome["message"] or "Expense rejected")
@@ -88,8 +90,10 @@ def update_expense(
             lambda: cash_repository.adjust_entry_amount(
                 db, org_id=org_id, ref_type="expense", ref_id=expense_id, new_amount=new_amount, adjusted_by=user_id,
             ),
-            on_event=on_event,
+            on_event=on_event, operation="adjust_entry_amount",
         )
+        if result["status"] not in ("adjusted", "unchanged"):
+            report_rejected(on_event, operation="adjust_entry_amount", error_number=result.get("error_number"), message=result.get("message") or result["status"])
         if result["status"] == "not_found":
             raise NotFoundError("Expense not found")
         if result["status"] not in ("adjusted", "unchanged"):
@@ -106,7 +110,8 @@ def delete_expense(
     """Void the expense (usp_VoidExpense): reversing cash entry (money back), expense deleted - one transaction."""
     result = run_with_deadlock_retry(
         lambda: expenses_repository.void_expense(db, org_id=org_id, expense_id=expense_id, voided_by=user_id),
-        on_event=on_event,
+        on_event=on_event, operation="void_expense",
     )
     if result["status"] == "not_found":
+        report_rejected(on_event, operation="void_expense", error_number=50007, message="Expense not found")
         raise NotFoundError("Expense not found")

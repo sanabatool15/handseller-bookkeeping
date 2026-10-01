@@ -94,6 +94,24 @@ Run `05` (amended in F4) and then `06` in SSMS; both are re-runnable. Expenses n
 
 UI: new **Cash** page (`/cash`: balance, monthly summary cards, type/date filters, ledger with running balance); expenses and sales pages show API errors.
 
+## Transaction log, Activity and DB Lab (slice F5, `../sql_server/07_txn_log.sql`)
+
+Run `07_txn_log.sql` in SSMS (re-runnable). The money paths (record/void sale, record/void expense, amount adjustments) now log their transaction events (start, suspected lock wait, deadlock 1205, retry, rollback, commit, business rejection)
+into `txn_log`, written on a SEPARATE autocommit connection after the business transaction ended, so rolled-back requests are logged too. Design: `specs/15-transactions-and-concurrency.md` (sections 8-9), UI: `specs/16-ui-extensions.md`.
+Every response carries `X-Request-ID` (an incoming one is honoured only if it matches `^[A-Za-z0-9._-]{8,64}$`); 409 bodies also carry `request_id`.
+
+| Endpoint | Behaviour |
+|---|---|
+| `GET /db-logs?request_id=&operation=&step=&status=&limit=&offset=&order=` | events of YOUR org (newest first, `order=asc` for a timeline); `limit` 1..200 (default 100); `step` must be a known step (422); a foreign request id simply returns `[]` |
+| `GET /db-logs/requests?request_id=&operation=&outcome=&limit=&offset=` | one row per request: `request_id, operation, first_at, last_at, event_count, retries, deadlocks, lock_waits_suspected, duration_ms, isolation_level, outcome` (`committed`, `deadlock_retried`, `rolled_back`, `rejected`, `in_progress`) |
+| `GET /db-lab/status` | `{"enabled": bool}`: the only DB Lab route that is not 404 when the lab is off |
+| `POST /db-lab/race-sale` | **demo only.** `{product_id, quantity=1 (1..10), clients=2 (2..10), mode: safe\|unsafe, isolation_level (READ UNCOMMITTED, READ COMMITTED, REPEATABLE READ, SERIALIZABLE, SNAPSHOT), delay_seconds=1 (0..5), restore_stock=true}`; N threads each with their own connection sell the product; returns per-client outcomes, `stock_before/after_race/after`, `summary` (incl. `oversold_units`) and a `verdict` |
+| `POST /db-lab/deadlock`, `POST /db-lab/deadlock-fixed` | **demo only.** `{product_a, product_b, delay_seconds=1}`: two clients lock the two products in opposite order (one 1205 victim, retried) resp. in the same order (no deadlock); stock is net zero |
+
+Settings: `ENABLE_DB_LAB` (default `false`; when false every `/db-lab/*` route except `/status` is 404; never enable for real users), `LOCK_WAIT_SUSPECT_MS` (default `300`; calls at least this slow are logged as `lock_wait_suspected`, which is INFERRED from elapsed time, the app cannot observe lock waits).
+UI: new **Activity** page (`/activity`) and **DB Lab** page (`/db-lab`, sidebar link only when enabled). Mutating DB Lab routes need `Idempotency-Key` like everything else. Tests: `tests/unit/test_txn_recorder.py`, `tests/integration/test_txn_log_api.py`, `tests/integration/test_db_lab_api.py`, gated `tests/sqlserver/test_txn_log_sqlserver.py`.
+Note: all routers now use `Depends(get_db, scope="function")` (`routers.deps.DB`) so commit/rollback and the log flush happen BEFORE the response is sent (specs/15 section 8).
+
 ## Customers endpoints (slice F2, `../sql_server/04_customers.sql`)
 
 All require auth; `POST`/`PUT` require `Idempotency-Key`. Cross-tenant ids return 404. Details: `specs/14-inventory-and-cash-domain.md`.
@@ -323,7 +341,7 @@ Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 ### SQL Server environment variables (see `specs/13-sql-server-migration.md`)
 
 Everything (auth, sales, expenses, agent jobs/logs, Inngest job steps, MCP server, agent tools) runs on
-SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql`, `04_customers.sql`, `05_sale_items_cash_recordsale.sql`, `06_expenses_cash.sql` in SSMS first, then set either
+SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql`, `04_customers.sql`, `05_sale_items_cash_recordsale.sql`, `06_expenses_cash.sql`, `07_txn_log.sql` in SSMS first, then set either
 `MSSQL_CONNECTION_STRING` (full ODBC string) or `MSSQL_SERVER`, `MSSQL_DATABASE` (default
 `HandsellerDB`), `MSSQL_USER`/`MSSQL_PASSWORD` (empty user = Windows auth), `MSSQL_DRIVER`
 (default `ODBC Driver 18 for SQL Server`), `MSSQL_TRUST_SERVER_CERTIFICATE`. Requires the

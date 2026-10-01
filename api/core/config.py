@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     openai_api_key: str = "sk-test"
     openai_model: str = "gpt-4o-mini"
 
+    # Transaction log + DB Lab (slice F5, specs/15 and specs/16)
+    # A call whose elapsed time reaches this many ms is logged as "lock_wait_suspected". It is INFERRED from the
+    # elapsed time: the application cannot observe lock waits directly.
+    lock_wait_suspect_ms: int = 300
+    # Demo-only concurrency lab (/db-lab/*). When False every /db-lab route except /db-lab/status answers 404.
+    enable_db_lab: bool = False
+
     # App
     app_env: str = "development"
     log_level: str = "INFO"

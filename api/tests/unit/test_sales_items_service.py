@@ -147,7 +147,7 @@ def test_deadlock_victim_is_retried_once_and_reported(fake_db, monkeypatch):
     events = []
     sale = sales_service.create_sale(fake_db, org_id=ORG, user_id="u1", amount=7, category="x",
                                      on_event=lambda step, **info: events.append((step, info["attempt"])))
-    assert calls["n"] == 2 and sale["amount"] == 7 and events == [("deadlock_retry", 1)]
+    assert calls["n"] == 2 and sale["amount"] == 7 and [e for e in events if e[0].startswith("deadlock")] == [("deadlock_retry", 1)]
     assert _balance(fake_db) == 7.0  # recorded exactly once
 
 

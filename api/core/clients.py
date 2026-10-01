@@ -18,6 +18,7 @@ T = TypeVar("T")
 
 _redis_client: Optional[aioredis.Redis] = None
 _db_factory: Optional[Callable[[], Db]] = None
+_autocommit_factory: Optional[Callable[[], Db]] = None
 
 
 def get_db_connection() -> Db:
@@ -31,6 +32,23 @@ def set_db_factory(factory: Optional[Callable[[], Db]]) -> None:
     """Test/dependency-injection hook; pass None to restore the real pyodbc factory."""
     global _db_factory
     _db_factory = factory
+
+
+def get_autocommit_connection() -> Db:
+    """Return a NEW, SEPARATE SQL Server connection in AUTOCOMMIT mode (caller closes it).
+
+    Used to write the transaction log (`txn_log`): every statement on it commits on its own, completely independent
+    of the business transaction running on another connection, so the log of a request that was rolled back
+    survives the rollback (specs/15). Never use it for business writes."""
+    if _autocommit_factory is not None:
+        return _autocommit_factory()
+    return connect(build_mssql_connection_string(get_settings()), autocommit=True)
+
+
+def set_autocommit_factory(factory: Optional[Callable[[], Db]]) -> None:
+    """Test hook for `get_autocommit_connection`; pass None to restore the real pyodbc factory."""
+    global _autocommit_factory
+    _autocommit_factory = factory
 
 
 @contextmanager

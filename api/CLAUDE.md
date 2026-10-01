@@ -36,6 +36,10 @@ Do not do this even under time pressure or when asked to "just make it work":
    - `repository/*.py`: the **only** place that talks to the database (SQL Server, T-SQL via `core.db.Db`).
      *(Annotation, slice F0b: this used to say Supabase; Supabase is fully removed. Jobs/MCP outside FastAPI use
      `core.clients.db_session()` / `run_in_db()`; routers use `routers.deps.get_db`.)*
+   *(Annotation, slice F5: `services/txn_log_service.py` and `services/db_lab_service.py` also import `core.clients` - for the
+   separate autocommit log connection and the per-thread lab connections - like `health_service`; they still never run SQL,
+   that stays in `repository/txn_log_repository.py` / `db_lab_repository.py`. `tests/unit/test_repository_sql_rules.py` limits
+   which services may do this.)*
    Before adding a new feature, ask which layer it belongs to. If a router
    needs a new capability, add it to a service; if a service needs new data
    access, add it to a repository — don't take a shortcut "just this once."
@@ -109,6 +113,10 @@ commands, and why: `specs/11-package-name-collisions.md`.
   `import agents` still resolves to the real `openai-agents` SDK (see the
   package-collision section above) — don't reintroduce a local package
   named `agents` anywhere that could shadow it again.
+- **Routers get the DB with `DB` (`routers.deps.DB` = `Depends(get_db, scope="function")`), never `Depends(get_db)`**: the
+  default scope would commit/roll back (and flush the txn log) AFTER the response was sent. A test enforces it. A mutating money path
+  passes `on_event=recorder.on_event` (`Depends(get_txn_recorder)`) to its service and the service wraps its repository call in
+  `run_with_deadlock_retry(..., on_event=on_event, operation="<name>")` (specs/15 section 8).
 - **Adding a new mutating endpoint**: it must (a) require and honor
   `Idempotency-Key` (automatic via the middleware, don't opt out), (b) go
   through a service, (c) have its repository calls scoped by `id`+`org_id`

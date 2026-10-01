@@ -71,3 +71,7 @@ a single data path now** (`routers/deps.py::get_db`, SQL Server, per request, co
 No SQL Server was available while writing this. All T-SQL (DDL, triggers, repository statements,
 the `datetimeoffset` output converter) is unrun. Verify with `sql_server/TEST_CASES.md` and
 `RUN_MSSQL=1 pytest tests/sqlserver`, and expect to fix small syntax issues.
+
+## Slice F5: transaction log + DB Lab
+`sql_server/07_txn_log.sql` adds the append-only `txn_log` (deliberately no `updated_at`/trigger, no `created_by`; see its header and specs/17). `core/db.py` gains `Db.get_isolation_level/set_isolation_level`,
+`error_number_of`, richer `run_with_deadlock_retry` hook events; `core/clients.py` gains `get_autocommit_connection()`/`set_autocommit_factory()` (a SEPARATE autocommit connection for the log). Design: specs/15 sections 8-9, UI: specs/16.

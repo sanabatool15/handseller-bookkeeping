@@ -405,3 +405,77 @@ Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_expenses_cash_sqlserver.py -v` f
 Expected: 12 tests pass (negative balance + ledger row, overflow rollback, procedure validation, void symmetry, adjustment deltas, item-sale refusal, own vs nested, 10 concurrent expenses, concurrent adjustments, real filters/summary, product-delete 409, CHECK widening).
 Pass: all green; tests clean up their own rows. Report any T-SQL syntax error message so the spec can be corrected.
 
+
+## Slice F5: transaction event log, Activity page, DB Lab (`07_txn_log.sql`)
+
+Requires 01..07. Start the API with `ENABLE_DB_LAB=true` for F5-07..F5-11 (`ENABLE_DB_LAB=true uvicorn core.fastapi_app:app` or in `.env`). Lab runs take 3-10 s. Replace `<ORG>` with your org id.
+
+### F5-01 Script runs and is re-runnable
+Steps: execute `07_txn_log.sql` twice; `SELECT name FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.txn_log');` and `SELECT name FROM sys.check_constraints WHERE parent_object_id = OBJECT_ID('dbo.txn_log');`
+Expected: no error either time; indexes `PK_txn_log`, `idx_txn_log_org_id`, `idx_txn_log_org_request`; checks `CK_txn_log_step`, `CK_txn_log_retry_no`. No trigger on the table (`SELECT * FROM sys.triggers WHERE parent_id = OBJECT_ID('dbo.txn_log')` is empty): append-only by design.
+Pass: yes.
+
+### F5-02 CHECK on step, NOT NULL org
+Steps: `INSERT dbo.txn_log(request_id, org_id, operation, step) VALUES (N'x', '<ORG>', N'op', N'bogus');` then the same with a valid step (`N'committed'`) and with `org_id` NULL.
+Expected: 1st fails (CK_txn_log_step); 2nd works (`created_at` defaulted, `retry_no` 0); 3rd fails (NULL). Cleanup: `DELETE dbo.txn_log WHERE request_id = N'x';`
+Pass: yes.
+
+### F5-03 Successful sale is logged (UI + API)
+Steps: Sales page: record a sale with an item (stock available). Open Activity (`/activity`). Click the newest request id. Also `GET /db-logs?order=asc&limit=10`.
+Expected: the response of `POST /sales` carries header `X-Request-ID`. Activity shows one row, operation `record_sale`, outcome `committed`, retries 0. Timeline: `txn_started` then `committed`; isolation level READ COMMITTED. In SSMS: `SELECT * FROM dbo.txn_log WHERE request_id = N'<id>' ORDER BY id;` returns the same 2 rows.
+Pass: yes.
+
+### F5-04 Business rejection is NOT labelled a rollback
+Steps: sell more of a product than the stock (e.g. stock 1, quantity 5).
+Expected: 409 `Not enough stock for ...`; the body contains `request_id`. Activity: outcome `rejected (business rule)`; timeline `txn_started`, `business_rejected` (error 50001, message says "not an engine rollback"). No `rolled_back` row. Stock unchanged, no sale, no ledger row.
+Pass: yes.
+
+### F5-05 A rolled-back request still leaves its log
+Steps: in SSMS `ALTER TABLE dbo.cash_ledger ADD CONSTRAINT CK_tmp_f5 CHECK (amount <> 77);` then in the app record a quick sale of amount 77 (forces an engine error inside the procedure). Look at Activity and at the stock/cash. Cleanup: `ALTER TABLE dbo.cash_ledger DROP CONSTRAINT CK_tmp_f5;`
+Expected: the API answers an error (409/422/500 depending on how the procedure reports it); no sale, no ledger row, balance unchanged (everything rolled back); BUT Activity lists the request with `rolled_back` (or `rejected` if the procedure reported it as a business failure) and its timeline. The log row exists because it was written on another connection after the rollback.
+Pass: yes; if nothing is logged, check the API log for "could not write ... txn_log events".
+
+### F5-06 Lock contention shows as a SUSPECTED lock wait
+Steps: SSMS session A: `BEGIN TRAN; UPDATE dbo.products SET stock_qty = stock_qty WHERE id = '<P>';` (leave open). In the app sell that product. After ~5 s run `ROLLBACK` in session A. Meanwhile in session B: `SELECT * FROM sys.dm_tran_locks WHERE request_status = 'WAIT';`
+Expected: the sale hangs, then completes after the ROLLBACK. Activity timeline: `txn_started`, `lock_wait_suspected` (duration ~5000 ms; text says inferred, not observed), `committed`. Session B showed the real WAIT row (SQL Server knows; the app only infers).
+Pass: yes.
+
+### F5-07 DB Lab gating
+Steps: start the API WITHOUT `ENABLE_DB_LAB` (or `false`); open `/db-lab` in the UI; call `POST /db-lab/race-sale` and `GET /db-lab/status` with curl (token + `Idempotency-Key`).
+Expected: no DB Lab link in the sidebar; the page says it is switched off; `race-sale` -> 404, status -> `{"enabled": false}`. With `ENABLE_DB_LAB=true` + restart: link visible, page works, status `{"enabled": true}`.
+Pass: yes.
+
+### F5-08 Race sale, unsafe vs safe (the oversell)
+Steps: create a product with stock 1. DB Lab: product = it, clients 3, delay 1, isolation READ COMMITTED, mode `unsafe` -> **Race sale**. Then mode `safe` -> **Race sale**.
+Expected: unsafe: 3 clients `committed`, "OVERSOLD: 3 clients sold 1 unit(s) each but only 1 existed", stock after the race 0, units oversold 2; stock restored to 1 afterwards. safe: exactly 1 `committed`, 2 `rejected`, no oversell; the losers' timelines show `lock_wait_suspected` (~1 s) then `business_rejected`; stock back to 1 afterwards. Every client has its own request id/link to Activity.
+Pass: yes. Compare with the `unsafe` + `SERIALIZABLE` run (F5-09).
+
+### F5-09 Unsafe race at SERIALIZABLE
+Steps: same product (stock 1), 2 clients, `unsafe`, SERIALIZABLE -> **Race sale**.
+Expected: no oversell: 1 `committed`; the other client shows error 1205 (deadlock between two shared locks that both want to write), `retries` 1, then `rejected` (it re-read stock 0). Its timeline: `txn_started`, (`lock_wait_suspected`), `deadlock_1205_caught`, `retry_triggered`, `txn_started`, `business_rejected`. (Isolation SNAPSHOT: needs `ALTER DATABASE HandsellerDB SET ALLOW_SNAPSHOT_ISOLATION ON`; the second writer then fails with error 3960 and is `rolled_back`; without it error 3952.)
+Pass: yes.
+
+### F5-10 Force deadlock and its fix
+Steps: two products A and B (any stock). **Force deadlock** (delay 1), then **Deadlock fixed**.
+Expected: Force deadlock takes ~6-8 s (SQL Server's deadlock monitor): client 1 `committed`; client 2 shows error 1205, retries 1, final `committed`; verdict "SQL Server chose 1 victim(s) (error 1205); the victim was retried". Client 2's timeline: `txn_started`, `lock_wait_suspected`, `deadlock_1205_caught`, `retry_triggered`, `txn_started`, `committed`; Activity outcome `deadlock, retried`. Stock of A and B unchanged afterwards. Deadlock fixed: both `committed`, no error, retries 0, verdict "Deadlock prevented".
+Pass: yes. (SSMS: `SELECT ... FROM sys.dm_xe_session_targets` / the `system_health` session shows the xml_deadlock_report for the first run.)
+
+### F5-11 Two browser tabs sell the last unit (manual, no lab needed)
+Steps: product with stock 1. Open the Sales page in two tabs, fill the same sale (the product, quantity 1), press Save in both within a second. Open Activity.
+Expected: exactly one 201 and one 409 (`Not enough stock`); stock 0; Activity shows two requests: `committed` and `rejected (business rule)` (the loser may show a `lock_wait_suspected` if it queued behind the winner's commit); the 409 body has `request_id` that matches the rejected row.
+Pass: yes.
+
+### F5-12 Multi-tenancy of the log
+Steps: log in as a second org; open Activity; `GET /db-logs?request_id=<id from org A>` and `GET /db-logs/requests`.
+Expected: org B sees none of org A's requests; a foreign request id gives an empty list (200), never the events. `GET /db-lab/status` works for both. Lab runs of org B only touch org B's products (a product id of org A gives 404).
+Pass: yes.
+
+### F5-13 Request-id header hygiene
+Steps: `curl -i -H "X-Request-ID: trace-abc_123.xyz" .../products`; then with `X-Request-ID: bad id; DROP TABLE x`.
+Expected: the first is echoed back; the second is ignored and a 32-hex id is returned instead.
+Pass: yes.
+
+### F5-14 Automated DB tests
+Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_txn_log_sqlserver.py -v` from `api/` (needs 01..07; takes ~30 s).
+Expected: 6 tests pass (isolation level round trip, org-scoped log reads, a rolled-back request still logged, unsafe race oversells while safe does not, unsafe at SERIALIZABLE never oversells, real deadlock = exactly one 1205 victim and the retry succeeds). Tests clean up after themselves.
+Pass: all green. Report any T-SQL syntax error text so the spec can be corrected.

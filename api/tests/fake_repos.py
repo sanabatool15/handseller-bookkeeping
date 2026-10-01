@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import copy
 import itertools
+import threading
+import time
 import uuid
 from typing import Any, Optional
 
@@ -35,6 +37,9 @@ class FakeSqlStore:
         self.sale_items: dict[str, dict[str, Any]] = {}
         self.cash_accounts: dict[str, dict[str, Any]] = {}   # keyed by org_id
         self.cash_ledger: dict[str, dict[str, Any]] = {}
+        # txn_log is deliberately NOT in _TABLES: FakeSqlDb.rollback() restores only the business tables, which is exactly how
+        # a log written on a SEPARATE autocommit connection survives the rollback of the business transaction.
+        self.txn_log: list[dict[str, Any]] = []
 
     _TABLES = ("users", "orgs", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers",
                "sale_items", "cash_accounts", "cash_ledger")
@@ -579,7 +584,7 @@ def build_ownership_fake(store: FakeSqlStore):
 
 def install_fake_repos(monkeypatch, store: FakeSqlStore) -> None:
     from repository import (agent_jobs_repository, cash_repository, customers_repository, expenses_repository, health_repository, orgs_repository,
-                            products_repository, sales_repository, users_repository)
+                            products_repository, sales_repository, txn_log_repository, users_repository)
 
     for name, fn in build_sales_fakes(store).items():
         monkeypatch.setattr(sales_repository, name, fn)
@@ -593,6 +598,8 @@ def install_fake_repos(monkeypatch, store: FakeSqlStore) -> None:
         monkeypatch.setattr(customers_repository, name, fn)
     for name, fn in build_agent_jobs_fakes(store).items():
         monkeypatch.setattr(agent_jobs_repository, name, fn)
+    for name, fn in build_txn_log_fakes(store).items():
+        monkeypatch.setattr(txn_log_repository, name, fn)
     monkeypatch.setattr(repo_base, "get_ownership", build_ownership_fake(store))
     monkeypatch.setattr(health_repository, "ping", lambda db: True)
 
@@ -600,3 +607,301 @@ def install_fake_repos(monkeypatch, store: FakeSqlStore) -> None:
         monkeypatch.setattr(users_repository, name, fn)
     for name, fn in build_orgs_fakes(store).items():
         monkeypatch.setattr(orgs_repository, name, fn)
+
+
+
+# ---------------------------------------------------------------------------------------------------- txn_log (F5)
+class FakeLogDb:
+    """Stand-in for the SEPARATE autocommit connection of core.clients.get_autocommit_connection()."""
+
+    autocommit = True
+
+    def __init__(self, store: FakeSqlStore) -> None:
+        self.store, self.closed = store, False
+
+    def commit(self) -> None: ...
+    def rollback(self) -> None: ...
+
+    def close(self) -> None:
+        self.closed = True
+
+
+_log_ids = itertools.count(1)
+
+
+def build_txn_log_fakes(store: FakeSqlStore) -> dict[str, Any]:
+    from repository import txn_log_repository as real
+
+    def insert_events(db, *, org_id, events) -> int:
+        # The real writer must be handed the autocommit connection, never the business connection.
+        assert isinstance(db, FakeLogDb), "txn_log must be written on the separate autocommit connection"
+        for e in events:
+            if e["step"] not in real.STEPS:
+                raise ValueError(f"unknown txn_log step {e['step']!r}")
+            store.txn_log.append({"id": next(_log_ids), "org_id": org_id, **{k: e.get(k) for k in (
+                "request_id", "operation", "step", "isolation_level", "status", "error_number", "message", "duration_ms", "created_at")},
+                "retry_no": e.get("retry_no", 0)})
+        return len(events)
+
+    def list_events(db, *, org_id, request_id=None, operation=None, step=None, status=None, limit=100, offset=0, oldest_first=False):
+        limit, offset = repo_base.clamp_page(limit, offset)
+        rows = [r for r in store.txn_log if r["org_id"] == org_id and (request_id is None or r["request_id"] == request_id)
+                and (operation is None or r["operation"] == operation) and (step is None or r["step"] == step)
+                and (status is None or r["status"] == status)]
+        rows.sort(key=lambda r: (r["created_at"], r["id"]), reverse=not oldest_first)
+        return [dict(r) for r in rows[offset:offset + limit]]
+
+    def list_requests(db, *, org_id, request_id=None, operation=None, outcome=None, limit=50, offset=0):
+        limit, offset = repo_base.clamp_page(limit, offset)
+        groups: dict[str, list[dict]] = {}
+        for r in store.txn_log:
+            if r["org_id"] == org_id and (request_id is None or r["request_id"] == request_id) \
+                    and (operation is None or r["operation"] == operation):
+                groups.setdefault(r["request_id"], []).append(r)
+        out = []
+        for rid, rows in groups.items():
+            steps = [r["step"] for r in rows]
+            retries = steps.count("retry_triggered")
+            if "committed" in steps:
+                oc = "deadlock_retried" if retries else "committed"
+            elif "rolled_back" in steps:
+                oc = "rolled_back"
+            elif "business_rejected" in steps:
+                oc = "rejected"
+            else:
+                oc = "in_progress"
+            out.append({"request_id": rid, "operation": max(r["operation"] for r in rows),
+                        "first_at": min(r["created_at"] for r in rows), "last_at": max(r["created_at"] for r in rows),
+                        "event_count": len(rows), "retries": retries,
+                        "deadlocks": sum(1 for s in steps if s in ("deadlock_1205_caught", "lock_timeout_caught")),
+                        "lock_waits_suspected": steps.count("lock_wait_suspected"),
+                        "duration_ms": max([r["duration_ms"] or 0 for r in rows]), "isolation_level": rows[-1]["isolation_level"],
+                        "outcome": oc})
+        if outcome is not None:
+            out = [r for r in out if r["outcome"] == outcome]
+        out.sort(key=lambda r: (r["last_at"], r["request_id"]), reverse=True)
+        return out[offset:offset + limit]
+
+    def get_isolation_level(db) -> str:
+        return getattr(db, "isolation_level", "READ COMMITTED")
+
+    return {"insert_events": insert_events, "list_events": list_events, "list_requests": list_requests,
+            "get_isolation_level": get_isolation_level}
+
+
+# ---------------------------------------------------------------------------------------------------- DB Lab (F5)
+class FakeDeadlock(Exception):
+    def __init__(self) -> None:
+        super().__init__("40001", "[40001] Transaction (Process ID 55) was deadlocked on lock resources with another process "
+                                  "and has been chosen as the deadlock victim. Rerun the transaction. (1205) (SQLExecDirectW)")
+
+
+class FakeLabConn:
+    """One 'connection' of the lab engine: it owns locks until commit()/rollback()."""
+
+    def __init__(self, engine: "FakeLabEngine") -> None:
+        self.engine = engine
+        self.held: set[str] = set()
+        self.undo: dict[str, int] = {}
+        self.snapshot_reads: dict[str, int] = {}
+        self.isolation_level = "READ COMMITTED"
+        self.low_priority = False
+        self.closed = False
+        self.commits = self.rollbacks = 0
+
+    def set_isolation_level(self, level: str) -> None:
+        from core.db import ISOLATION_LEVELS
+
+        if level not in ISOLATION_LEVELS:
+            raise ValueError("isolation level not allowed")
+        self.isolation_level = level
+
+    def get_isolation_level(self) -> str:
+        return self.isolation_level
+
+    def commit(self) -> None:
+        self.commits += 1
+        self.engine.end(self, undo=False)
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+        self.engine.end(self, undo=True)
+
+    def close(self) -> None:
+        self.closed = True
+        self.engine.end(self, undo=True)
+
+    def query(self, *a, **k):  # pragma: no cover
+        raise AssertionError("FakeLabConn does not run SQL")
+
+    query_one = execute = query
+
+
+class FakeLabEngine:
+    """A tiny lock manager that makes contention deterministic without SQL Server: shared/exclusive row locks on products,
+    lock waits, deadlock detection (wait-for cycle; the DEADLOCK_PRIORITY LOW client is the preferred victim) and rollback
+    that restores the rows. `time_scale` shortens WAITFOR (1 s -> 0.04 s)."""
+
+    def __init__(self, store: FakeSqlStore, time_scale: float = 0.04) -> None:
+        self.store, self.time_scale = store, time_scale
+        self.cv = threading.Condition()
+        self.locks: dict[str, dict[str, Any]] = {}
+        self.waits: dict[FakeLabConn, set[FakeLabConn]] = {}
+        self.before: dict[str, int] = {}
+        self.victims: set[FakeLabConn] = set()
+        self.deadlocks = 0
+        self.max_concurrent_waiters = 0
+        self.connections: list[FakeLabConn] = []
+
+    def connection(self) -> FakeLabConn:
+        conn = FakeLabConn(self)
+        with self.cv:
+            self.connections.append(conn)
+        return conn
+
+    # -- locks
+    def _blockers(self, conn, pid, mode) -> set:
+        lock = self.locks.setdefault(pid, {"S": set(), "X": None})
+        blockers = set()
+        if lock["X"] not in (None, conn):
+            blockers.add(lock["X"])
+        if mode == "X":
+            blockers |= lock["S"] - {conn}
+        return blockers
+
+    def _cycle(self, start):
+        path, seen = [], set()
+
+        def dfs(node) -> bool:
+            for nxt in self.waits.get(node, ()):
+                if nxt is start:
+                    return True
+                if nxt not in seen:
+                    seen.add(nxt)
+                    path.append(nxt)
+                    if dfs(nxt):
+                        return True
+                    path.pop()
+            return False
+
+        return {start, *path} if dfs(start) else None
+
+    def acquire(self, conn: FakeLabConn, pid: str, mode: str) -> None:
+        with self.cv:
+            while True:
+                if conn in self.victims:
+                    self.victims.discard(conn)
+                    self.waits.pop(conn, None)
+                    raise FakeDeadlock()
+                blockers = self._blockers(conn, pid, mode)
+                if not blockers:
+                    lock = self.locks[pid]
+                    if mode == "X":
+                        lock["X"] = conn
+                    elif lock["X"] is not conn:
+                        lock["S"].add(conn)
+                    conn.held.add(pid)
+                    self.waits.pop(conn, None)
+                    return
+                self.waits[conn] = blockers
+                self.max_concurrent_waiters = max(self.max_concurrent_waiters, len(self.waits))
+                cycle = self._cycle(conn)
+                if cycle:
+                    victim = next((c for c in sorted(cycle, key=lambda c: id(c)) if c.low_priority), conn)
+                    self.deadlocks += 1
+                    if victim is conn:
+                        self.waits.pop(conn, None)
+                        raise FakeDeadlock()
+                    self.victims.add(victim)
+                    self.cv.notify_all()
+                self.cv.wait(timeout=0.1)
+
+    def end(self, conn: FakeLabConn, *, undo: bool) -> None:
+        with self.cv:
+            if undo:
+                for pid, old in conn.undo.items():
+                    self.store.products[pid]["stock_qty"] = old
+            for pid in list(conn.held):
+                lock = self.locks.get(pid)
+                if lock:
+                    lock["S"].discard(conn)
+                    if lock["X"] is conn:
+                        lock["X"] = None
+                        self.before.pop(pid, None)
+            conn.held.clear(), conn.undo.clear(), conn.snapshot_reads.clear()
+            self.waits.pop(conn, None)
+            self.victims.discard(conn)
+            self.cv.notify_all()
+
+    # -- row access (what the faked repository primitives call)
+    def committed_value(self, pid: str) -> int:
+        return self.before.get(pid, self.store.products[pid]["stock_qty"])
+
+    def read(self, conn: FakeLabConn, pid: str) -> int:
+        level = conn.isolation_level
+        if level in ("REPEATABLE READ", "SERIALIZABLE"):
+            self.acquire(conn, pid, "S")
+            return self.store.products[pid]["stock_qty"]
+        if level == "READ UNCOMMITTED":
+            return self.store.products[pid]["stock_qty"]
+        value = self.committed_value(pid)
+        if level == "SNAPSHOT":
+            conn.snapshot_reads.setdefault(pid, value)
+        return value
+
+    def write(self, conn: FakeLabConn, pid: str, compute) -> bool:
+        self.acquire(conn, pid, "X")
+        with self.cv:
+            row = self.store.products[pid]
+            if conn.isolation_level == "SNAPSHOT" and pid in conn.snapshot_reads and conn.snapshot_reads[pid] != row["stock_qty"]:
+                raise Exception("42000", "Snapshot isolation transaction aborted due to update conflict. (3960)")
+            new = compute(row["stock_qty"])
+            if new is None:
+                return False
+            conn.undo.setdefault(pid, row["stock_qty"])
+            self.before.setdefault(pid, row["stock_qty"])
+            row["stock_qty"] = new
+            return True
+
+
+def install_db_lab_fakes(monkeypatch, store: FakeSqlStore, *, time_scale: float = 0.04) -> FakeLabEngine:
+    """Fake the PRIMITIVES of db_lab_repository (the composites naive_sale / safe_sale / lock_pair stay real) and make every
+    connection a FakeLabConn of one engine, so threads really contend. Returns the engine for assertions."""
+    from core import clients
+    from repository import db_lab_repository as lab
+
+    engine = FakeLabEngine(store, time_scale)
+    clients.set_db_factory(engine.connection)
+
+    def owned(org_id, pid) -> bool:
+        p = store.products.get(pid)
+        return bool(p and p["org_id"] == org_id)
+
+    def prepare_session(db, *, isolation_level, deadlock_low=False):
+        db.set_isolation_level(isolation_level)
+        db.low_priority = deadlock_low
+
+    def reset_session(db):
+        db.set_isolation_level("READ COMMITTED")
+        db.low_priority = False
+
+    def wait(db, seconds):
+        if seconds not in lab.ALLOWED_DELAYS:
+            raise ValueError("delay not allowed")
+        time.sleep(seconds * engine.time_scale)
+
+    def read_stock(db, *, org_id, product_id):
+        return engine.read(db, product_id) if owned(org_id, product_id) else None
+
+    def write_stock(db, *, org_id, product_id, new_qty):
+        return owned(org_id, product_id) and engine.write(db, product_id, lambda old: int(new_qty))
+
+    def touch_stock(db, *, org_id, product_id, delta):
+        return owned(org_id, product_id) and engine.write(db, product_id, lambda old: old + int(delta))
+
+    def safe_decrement(db, *, org_id, product_id, quantity):
+        return owned(org_id, product_id) and engine.write(db, product_id, lambda old: old - quantity if old >= quantity else None)
+
+    for fn in (prepare_session, reset_session, wait, read_stock, write_stock, touch_stock, safe_decrement):
+        monkeypatch.setattr(lab, fn.__name__, fn)
+    return engine

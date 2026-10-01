@@ -3,8 +3,8 @@ from __future__ import annotations
 import fakeredis.aioredis
 import pytest
 
-from core.clients import set_db_factory, set_redis
-from tests.fake_repos import FakeSqlDb, FakeSqlStore, install_fake_repos
+from core.clients import set_autocommit_factory, set_db_factory, set_redis
+from tests.fake_repos import FakeLogDb, FakeSqlDb, FakeSqlStore, install_fake_repos
 
 
 @pytest.fixture
@@ -33,5 +33,7 @@ def _wire_sql_fakes(monkeypatch, sql_store):
     dependency, Inngest jobs and the MCP server receive)."""
     install_fake_repos(monkeypatch, sql_store)
     set_db_factory(lambda: FakeSqlDb(sql_store))
+    set_autocommit_factory(lambda: FakeLogDb(sql_store))  # the SEPARATE connection the txn log is written on
     yield
     set_db_factory(None)
+    set_autocommit_factory(None)

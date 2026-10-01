@@ -193,3 +193,110 @@ export interface CustomerSummary {
   sale_count: number;
   last_sale_date: string | null;
 }
+
+// ---- Activity (transaction event log) and DB Lab (demo only) -------------------------------------------------------
+export type TxnStep =
+  | "txn_started"
+  | "lock_wait_suspected"
+  | "deadlock_1205_caught"
+  | "lock_timeout_caught"
+  | "retry_triggered"
+  | "rolled_back"
+  | "committed"
+  | "business_rejected";
+
+export interface TxnEvent {
+  id: number;
+  request_id: string;
+  org_id: string;
+  operation: string;
+  step: TxnStep;
+  isolation_level: string | null;
+  status: string | null;
+  error_number: number | null;
+  message: string | null;
+  duration_ms: number | null;
+  retry_no: number;
+  created_at: string;
+}
+
+export type TxnOutcome = "committed" | "deadlock_retried" | "rolled_back" | "rejected" | "in_progress";
+
+export interface TxnRequestSummary {
+  request_id: string;
+  operation: string;
+  first_at: string;
+  last_at: string;
+  event_count: number;
+  retries: number;
+  deadlocks: number;
+  lock_waits_suspected: number;
+  duration_ms: number;
+  isolation_level: string | null;
+  outcome: TxnOutcome;
+}
+
+export interface ActivityFilters {
+  requestId: string;
+  operation: string;
+  outcome: TxnOutcome | "";
+}
+
+export interface DbLabStatus {
+  enabled: boolean;
+}
+
+export type IsolationLevel = "READ UNCOMMITTED" | "READ COMMITTED" | "REPEATABLE READ" | "SERIALIZABLE" | "SNAPSHOT";
+
+export interface DbLabClientResult {
+  client: number;
+  request_id: string | null;
+  status: "committed" | "rejected" | "rolled_back";
+  retries: number;
+  duration_ms: number;
+  error_number: number | null;
+  message: string | null;
+}
+
+export interface DbLabSummary {
+  committed: number;
+  rejected: number;
+  rolled_back: number;
+  deadlock_victims: number;
+  oversold_units?: number;
+  retries?: number;
+}
+
+export interface DbLabRaceResult {
+  demo_only: boolean;
+  kind: "race_sale";
+  mode: "safe" | "unsafe";
+  isolation_level: IsolationLevel;
+  product_id: string;
+  quantity: number;
+  clients: number;
+  delay_seconds: number;
+  stock_before: number;
+  stock_after_race: number;
+  stock_after: number;
+  restored: boolean;
+  results: DbLabClientResult[];
+  summary: DbLabSummary;
+  verdict: string;
+}
+
+export interface DbLabDeadlockResult {
+  demo_only: boolean;
+  kind: "deadlock" | "deadlock_fixed";
+  delay_seconds: number;
+  product_a: string;
+  product_b: string;
+  stock_before: Record<string, number>;
+  stock_after: Record<string, number>;
+  restored: boolean;
+  results: DbLabClientResult[];
+  summary: DbLabSummary;
+  verdict: string;
+}
+
+export type DbLabResult = DbLabRaceResult | DbLabDeadlockResult;

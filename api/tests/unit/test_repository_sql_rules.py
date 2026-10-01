@@ -17,7 +17,7 @@ import re
 import pytest
 
 REPO_DIR = pathlib.Path(__file__).resolve().parents[2] / "repository"
-TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers", "sale_items", "cash_accounts", "cash_ledger"}
+TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers", "sale_items", "cash_accounts", "cash_ledger", "txn_log"}
 ROOT_TABLES = {"orgs"}
 SQL_START = re.compile(r"^\s*(/\*.*?\*/\s*)?(SET\s+NOCOUNT|DECLARE|SELECT|INSERT|UPDATE|DELETE|WITH|MERGE)\b", re.I | re.S)
 TABLE_REF = re.compile(r"\b(?:FROM|JOIN|UPDATE|INTO|DELETE\s+FROM)\s+(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)", re.I)
@@ -146,7 +146,7 @@ def test_guard_sees_sql_in_dicts_and_new_repositories():
 
 def test_every_tenant_table_has_a_repository_statement_with_org_id():
     text = " ".join(sql for _, _, sql, _ in _all() if sql)
-    for table in ("sales", "expenses", "agent_jobs", "agent_logs", "products", "customers", "sale_items", "cash_accounts", "cash_ledger"):
+    for table in ("sales", "expenses", "agent_jobs", "agent_logs", "products", "customers", "sale_items", "cash_accounts", "cash_ledger", "txn_log"):
         assert re.search(rf"\b{table}\b[^;]*\borg_id\b", text, re.I), table
 
 
@@ -306,3 +306,78 @@ def test_cash_repository_filters_are_static_parameterised_statements():
     assert "SUM(amount)" in opening and "org_id = ?" in opening and "entry_date < ?" in opening
     adjust = next(s for s in stmts if "usp_AdjustEntryAmount" in s)
     assert "@org_id = ?" in adjust and "%" not in adjust
+
+
+# ---- F5: txn_log + DB Lab ------------------------------------------------------------------------------------------
+def _repo_sql(name):
+    return {s for p, _, s, _ in _all() if p.name == name and s}
+
+
+def test_txn_log_repository_statements_all_carry_org_id_as_a_bound_parameter():
+    stmts = _repo_sql("txn_log_repository.py")
+    assert len(stmts) >= 4
+    for stmt in stmts:
+        assert re.search(r"\borg_id\b", stmt), stmt[:80]
+    insert = next(s for s in stmts if s.startswith("INSERT INTO txn_log"))
+    # org_id comes from the bound `?`, never from the JSON payload; identity order follows `seq`
+    assert insert.count("?") == 2 and re.search(r"SELECT j\.request_id, \?, j\.operation", insert) and "ORDER BY j.seq" in insert
+    assert "j.org_id" not in insert and "'$.org_id'" not in insert
+    assert not any(re.search(r"\b(UPDATE|DELETE)\b", s, re.I) for s in stmts)  # append-only
+
+
+def test_txn_log_requests_query_groups_by_request_id_and_derives_the_outcome_in_sql():
+    stmt = next(s for s in _repo_sql("txn_log_repository.py") if "GROUP BY request_id" in s)
+    for outcome in ("committed", "deadlock_retried", "rolled_back", "rejected", "in_progress"):
+        assert f"'{outcome}'" in stmt
+    assert "WHERE org_id = ?" in stmt and "FETCH NEXT ? ROWS ONLY" in stmt
+
+
+def test_db_lab_repository_sql_is_static_org_scoped_and_only_touches_stock():
+    stmts = _repo_sql("db_lab_repository.py")
+    data = [s for s in stmts if re.search(r"\b(FROM|UPDATE)\s+products\b", s)]
+    assert len(data) == 4  # read, naive write, guarded decrement, +/- touch
+    for stmt in data:
+        assert "WHERE id = ? AND org_id = ?" in stmt
+    assert next(s for s in data if "stock_qty >= ?" in s).startswith("UPDATE products SET stock_qty = stock_qty - ?")
+    text = (REPO_DIR / "db_lab_repository.py").read_text()
+    # WAITFOR is only ever one of five fixed literals chosen from an allow-list; nothing is formatted into SQL
+    waits = [n.value for n in ast.walk(ast.parse(text)) if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.value.startswith("WAITFOR DELAY '")]
+    assert sorted(waits) == [f"WAITFOR DELAY '00:00:0{i}'" for i in range(1, 6)] and "_WAIT.get(seconds)" in text
+    assert not any(isinstance(n, ast.JoinedStr) and any(isinstance(v, ast.Constant) and SQL_START.match(str(v.value)) for v in n.values)
+                   for n in ast.walk(ast.parse(text)))  # no f-string SQL
+    assert "DELETE" not in text and "INSERT" not in text
+
+
+def test_isolation_level_is_never_interpolated_into_sql():
+    from core import db as core_db
+
+    src = pathlib.Path(core_db.__file__).read_text()
+    assert "ISOLATION_STATEMENTS.get(" in src
+    assert not re.search(r"SET TRANSACTION ISOLATION LEVEL \{", src) and not re.search(r"SET TRANSACTION ISOLATION LEVEL \" *\+", src)
+
+
+def test_txn_log_sql_script_matches_the_repository_and_documents_its_deviations():
+    sql = (REPO_DIR.parents[1] / "sql_server" / "07_txn_log.sql").read_text()
+    code = _strip_sql_comments(sql)
+    from repository.txn_log_repository import STEPS
+
+    assert "USE HandsellerDB;" in code and "IF OBJECT_ID(N'dbo.txn_log', N'U') IS NULL" in code
+    assert re.search(r"org_id\s+uniqueidentifier\s+NOT NULL CONSTRAINT FK_txn_log_org REFERENCES dbo\.orgs\(id\)", code)
+    in_list = re.search(r"CK_txn_log_step CHECK \(step IN \((.*?)\)\)", code, re.S).group(1)
+    assert set(re.findall(r"N'([a-z_0-9]+)'", in_list)) == set(STEPS)
+    assert "idx_txn_log_org_id ON dbo.txn_log (org_id, created_at DESC)" in code and "idx_txn_log_org_request ON dbo.txn_log (org_id, request_id)" in code
+    assert code.count("IF NOT EXISTS (SELECT 1 FROM sys.indexes") == 2
+    for column in ("request_id", "operation", "isolation_level", "status", "error_number", "message", "duration_ms", "retry_no", "created_at"):
+        assert re.search(rf"\b{column}\b", code), column
+    # append-only: no trigger / updated_at, and the header says why
+    assert not re.search(r"\bCREATE\s+(OR\s+ALTER\s+)?TRIGGER\b", code, re.I) and not re.search(r"\bupdated_at\s+datetimeoffset", code)
+    assert "APPEND-ONLY" in sql and "NO updated_at" in sql
+    assert not re.search(r"\b(DROP|DELETE|TRUNCATE)\b", code, re.I)
+
+
+def test_only_the_documented_services_import_core_clients():
+    """api/CLAUDE.md rule 1 (annotated in F5): services never open connections themselves, except these three."""
+    allowed = {"health_service.py", "txn_log_service.py", "db_lab_service.py"}
+    offenders = [p.name for p in (REPO_DIR.parent / "services").glob("*.py")
+                 if re.search(r"^\s*(from core import clients|from core\.clients import|import core\.clients)", p.read_text(), re.M) and p.name not in allowed]
+    assert not offenders, offenders
