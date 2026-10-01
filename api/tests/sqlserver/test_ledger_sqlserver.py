@@ -46,7 +46,7 @@ def _purge(db, tenants):
     """Delete everything the tenants created (children first), scoped by org_id."""
     db.rollback()
     for t in tenants:
-        for table in ("agent_logs", "agent_jobs", "sales", "expenses"):
+        for table in ("agent_logs", "agent_jobs", "sale_items", "sales", "cash_ledger", "cash_accounts", "expenses"):
             db.execute(f"DELETE FROM {table} WHERE org_id = ?", (t.org_id,))  # test-only literal table names
         db.execute("UPDATE orgs SET owner_id = NULL WHERE id = ?", (t.org_id,))
         db.execute("DELETE FROM users WHERE org_id = ?", (t.org_id,))
@@ -88,7 +88,7 @@ def test_tenant_isolation_by_id_and_org(real_db, tenants):
     real_db.commit()
     assert sales_repository.get_sale_scoped(real_db, sale_id=sale["id"], org_id=b.org_id) is None
     assert sales_repository.update_sale_scoped(real_db, sale_id=sale["id"], org_id=b.org_id, updates={"amount": 999}) is None
-    assert sales_repository.delete_sale_scoped(real_db, sale_id=sale["id"], org_id=b.org_id) is False
+    assert sales_repository.void_sale(real_db, org_id=b.org_id, sale_id=sale["id"], voided_by=None)["status"] == "not_found"
     real_db.commit()
     assert sales_repository.get_sale_scoped(real_db, sale_id=sale["id"], org_id=a.org_id)["amount"] == 10.0
     assert base.get_ownership(real_db, table="sales", record_id=sale["id"], org_id=a.org_id) is True

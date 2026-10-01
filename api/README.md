@@ -21,7 +21,7 @@ ai_agents/     (renamed from agents/ — see "Package-name collisions, fixed" be
   rules/       Deterministic rule-based fallback (works fully offline)
   tools/       Utility functions (web search, deep-link generation)
 core/          FastAPI app wiring, settings, SQL Server (`db.py`, `clients.py`)/Redis clients, JWT
-../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql, 03_products.sql, 04_customers.sql (+ TEST_CASES.md)
+../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql, 03_products.sql, 04_customers.sql, 05_sale_items_cash_recordsale.sql (+ TEST_CASES.md)
 sql/           LEGACY Postgres/Supabase schema, kept for reference only (no longer used)
 tests/
   unit/        Mocked DB (in-memory fake) + fakeredis
@@ -61,6 +61,20 @@ All require auth; `POST`/`PUT` require `Idempotency-Key`. Cross-tenant ids retur
 | `GET /products?limit=&offset=&low_stock=true` | ordered by name; `low_stock` = `stock_qty <= reorder_level` |
 | `GET/PUT/DELETE /products/{id}` | PUT updates `name`, `sku`, `price`, `reorder_level`, `is_active` (never stock); 409 on SKU clash |
 | `POST /products/{id}/adjust-stock` | body `{delta: int != 0, reason?: str}`; one atomic guarded `UPDATE`; 409 if stock would go negative, 404 unknown/other org |
+
+## Sale line items, cash ledger and the atomic sale procedure (slice F3, `../sql_server/05_sale_items_cash_recordsale.sql`)
+
+`POST /sales` now runs the stored procedure `usp_RecordSale`: sale + line items + stock decrement + cash balance + cash
+ledger entry in ONE transaction (all or nothing). `DELETE /sales/{id}` runs `usp_VoidSale` (stock back, reversing cash entry).
+Design, transaction boundaries and concurrency: `specs/14-inventory-and-cash-domain.md` (F3) and `specs/15-transactions-and-concurrency.md`.
+
+| Endpoint | Behaviour |
+|---|---|
+| `POST /sales` | Body: `amount` (required only without items), optional `items: [{product_id, quantity > 0, unit_price? >= 0}]` (max 200; price defaults to the product's), `skip_invalid_items` (default false), `category`, `description`, `customer_name`, `customer_id`. With items the total is the sum of the lines and `amount` is ignored. 201 `committed`; 201 `partial` (body has `skipped_items: [{product_id, quantity, error_number, reason}]`); 409 `Not enough stock for <product>` and nothing changes; 404 `Product not found` (unknown or other org) / `Customer not found`; 422 validation |
+| `GET /sales`, `GET/PUT /sales/{id}` | Sale JSON now has `customer_id` and `items` (list, `[]` for quick sales; each item has `product_name`, `unit_price`, `line_total`). `PUT` changes metadata only; an `amount` change on a sale WITH items is 422 |
+| `DELETE /sales/{id}` | 204: void in one transaction; 404 unknown/other org |
+| `GET /cash/balance` | `{balance, updated_at}` (0.0 / null before the first sale) |
+| `GET /cash/ledger?limit=&offset=` | newest first: `entry_type` (`sale`, `sale_void`, ...), signed `amount`, `balance_after`, `ref_type/ref_id`, `entry_date` |
 
 ## Customers endpoints (slice F2, `../sql_server/04_customers.sql`)
 
@@ -291,7 +305,7 @@ Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 ### SQL Server environment variables (see `specs/13-sql-server-migration.md`)
 
 Everything (auth, sales, expenses, agent jobs/logs, Inngest job steps, MCP server, agent tools) runs on
-SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql` then `04_customers.sql` in SSMS first, then set either
+SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql`, `04_customers.sql`, `05_sale_items_cash_recordsale.sql` in SSMS first, then set either
 `MSSQL_CONNECTION_STRING` (full ODBC string) or `MSSQL_SERVER`, `MSSQL_DATABASE` (default
 `HandsellerDB`), `MSSQL_USER`/`MSSQL_PASSWORD` (empty user = Windows auth), `MSSQL_DRIVER`
 (default `ODBC Driver 18 for SQL Server`), `MSSQL_TRUST_SERVER_CERTIFICATE`. Requires the

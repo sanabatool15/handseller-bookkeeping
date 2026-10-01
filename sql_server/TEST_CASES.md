@@ -261,3 +261,81 @@ Pass: yes.
 Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_customers_sqlserver.py -v` from `api/`.
 Expected: 5 tests pass (summary join/scoping, filtered unique index, delete behaviour, composite FK, literal wildcards + trigger + isolation).
 Pass: all green; tests clean up their own rows.
+
+## Slice F3: sale line items, cash ledger, usp_RecordSale / usp_VoidSale
+
+Run `05_sale_items_cash_recordsale.sql` after 01..04 (twice, to check it is re-runnable). Replace `<ORG>` / `<USER>` with ids from your `orgs` / `users`.
+Helper setup used below (run once in SSMS):
+```sql
+DECLARE @org uniqueidentifier = '<ORG>';
+INSERT products (org_id, name, sku, price, stock_qty) VALUES (@org, N'Mug', N'F3-MUG', 10.00, 5), (@org, N'Pen', N'F3-PEN', 2.50, 1);
+SELECT id, name, stock_qty FROM products WHERE org_id = @org AND sku LIKE N'F3-%';
+```
+
+### F3-01 Script is re-runnable; objects exist
+Steps: run the script twice; `SELECT name FROM sys.tables WHERE name IN ('sale_items','cash_accounts','cash_ledger'); SELECT name FROM sys.procedures WHERE name LIKE 'usp[_]%Sale';`
+Expected: no errors both times; 3 tables and `usp_RecordSale`, `usp_VoidSale` listed. `sys.key_constraints` has `UQ_sales_id_org`, `UQ_products_id_org`.
+Pass: yes.
+
+### F3-02 Procedure commit (own transaction, from SSMS)
+Steps (no `BEGIN TRAN` first, so the procedure owns the transaction):
+```sql
+DECLARE @sale uniqueidentifier, @total decimal(14,2), @status nvarchar(20), @msg nvarchar(400), @err int, @skipped nvarchar(max);
+DECLARE @items nvarchar(max) = N'[{"product_id":"<MUG_ID>","quantity":2},{"product_id":"<PEN_ID>","quantity":1,"unit_price":3}]';
+EXEC dbo.usp_RecordSale @org_id='<ORG>', @created_by='<USER>', @category=N'retail', @items=@items,
+     @sale_id=@sale OUTPUT, @total=@total OUTPUT, @status=@status OUTPUT, @message=@msg OUTPUT, @error_number=@err OUTPUT, @skipped_items=@skipped OUTPUT;
+SELECT @sale, @total, @status, @msg, @err, @@TRANCOUNT AS trancount_after;
+```
+Expected: `@total` 23.00 (2*10 + 1*3), status `committed`, `@err` NULL, `trancount_after` 0. Mug stock 3, Pen stock 0; one `sale_items` row per line with `line_total` 20.00 / 3.00; `cash_accounts.balance` 23.00; one `cash_ledger` row (`sale`, amount 23.00, balance_after 23.00, ref_id = @sale).
+Pass: all numbers match.
+
+### F3-03 Atomic rollback on insufficient stock
+Steps: call the procedure with `[{"product_id":"<MUG_ID>","quantity":1},{"product_id":"<PEN_ID>","quantity":5}]` (Pen has 0 left now).
+Expected: `@status = 'rolled_back'`, `@err = 50001`, message `Not enough stock for Pen`, `@sale` NULL. Mug stock unchanged (3), no new `sales` / `sale_items` / `cash_ledger` row, balance unchanged (23.00).
+Pass: nothing changed, not even the first (valid) item.
+
+### F3-04 Savepoint partial (`@skip_invalid_items = 1`)
+Steps: same call with `@skip_invalid_items = 1` and an extra item with a random `product_id`.
+Expected: `@status = 'partial'`, `@skipped` is a JSON array with two entries (50001 for Pen, 50002 unknown product); only the Mug line exists, Mug stock decreased by 1, balance increased by 10.00.
+Pass: yes. With ONLY invalid items and skip=1: `rolled_back`, nothing recorded.
+
+### F3-05 Quick sale (no items)
+Steps: `EXEC dbo.usp_RecordSale @org_id='<ORG>', @created_by='<USER>', @amount=40, @category=N'retail', ...outputs`; then with `@amount = NULL` and no items.
+Expected: first `committed`, total 40, balance +40, ledger row; second `rolled_back`, `@err = 50003`.
+Pass: yes.
+
+### F3-06 Nested transaction: the caller decides
+Steps: `BEGIN TRAN; EXEC dbo.usp_RecordSale ...(valid items)...; SELECT @@TRANCOUNT; ROLLBACK;`
+Expected: status `committed`, `@@TRANCOUNT` = 1 inside (the procedure did NOT commit); after `ROLLBACK` stock, sales, ledger and balance are exactly as before. Repeat with `COMMIT` instead: the data stays.
+Then `BEGIN TRAN; <insert one unrelated row>; EXEC ... (insufficient stock) ...; SELECT @@TRANCOUNT; COMMIT;` => status `rolled_back`, `@@TRANCOUNT` still 1, the unrelated row survives the commit.
+Pass: yes (this proves the savepoint logic).
+
+### F3-07 Race: two sessions, one unit
+Steps: product with `stock_qty = 1`. Session A: `BEGIN TRAN; EXEC usp_RecordSale ... qty 1 ...;` (do not commit). Session B: run the same EXEC (it blocks on the product row). In A: `COMMIT`.
+Expected: B unblocks and returns `rolled_back` / 50001; stock = 0; exactly one sale; balance = one sale.
+Pass: yes. Automated version: `RUN_MSSQL=1 pytest tests/sqlserver/test_sales_items_sqlserver.py -k race -v` (10 threads, 1 unit => exactly 1 success).
+
+### F3-08 Void
+Steps: `EXEC dbo.usp_VoidSale @org_id='<ORG>', @sale_id=@sale, @voided_by='<USER>', @status=@s OUTPUT, @message=@m OUTPUT, @error_number=@e OUTPUT;`
+Expected: `voided`; the stock of each item is back, a `sale_void` ledger row with the negative amount, balance reduced by the sale total, the sale and its items are gone. Again with the same id: `not_found` / 50006. With another org's id: `not_found`, nothing changed.
+Pass: yes.
+
+### F3-09 Constraints work without the procedure
+Steps: `INSERT sale_items (org_id,sale_id,product_id,quantity,unit_price) VALUES (...)` with quantity 0; with unit_price -1; with a product of ANOTHER org; `INSERT cash_ledger (org_id,entry_type,amount,balance_after) VALUES ('<ORG>',N'bogus',1,1)`; `UPDATE products SET stock_qty=-1 ...`.
+Expected: every statement fails (547, composite FK / CHECK).
+Pass: yes.
+
+### F3-10 API: POST /sales with items, then GET /cash/balance
+Steps: `POST /sales {"category":"retail","items":[{"product_id":"<MUG_ID>","quantity":2}]}` with `Idempotency-Key`; `GET /products/<MUG_ID>`; `GET /cash/balance`; `GET /cash/ledger`.
+Expected: 201 with `items` (product_name, unit_price 10, line_total 20), `amount` 20; stock decreased by 2; balance +20; one ledger entry.
+Pass: yes. Repeating the POST with the same key returns the same body and sells only once.
+
+### F3-11 API error mapping and no side effects
+Steps: `POST /sales` with quantity larger than stock; with an unknown/other org product id; with `quantity: 0`; with neither `amount` nor `items`; `skip_invalid_items: true` mixed valid/invalid.
+Expected: 409 `Not enough stock for <name>`; 404 `Product not found`; 422; 422; 201 with `skipped_items`. After each failure the stock, sales list and balance are unchanged.
+Pass: yes. `PUT /sales/{id}` with `amount` on an item sale: 422; `DELETE /sales/{id}` voids (stock/balance restored), other org's token: 404.
+
+### F3-12 Automated DB tests
+Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_sales_items_sqlserver.py -v` from `api/`.
+Expected: 10 tests pass (commit, atomic rollback, savepoint partial, own vs nested transaction, nested business failure, 2 race tests, void, plain sale + foreign product, constraints).
+Pass: all green; tests clean up their own rows. If the engine reports a syntax error in the procedures, fix it in `05_...sql` and re-run (the script is re-runnable); please report the message so the spec can be corrected.

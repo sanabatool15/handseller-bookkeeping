@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from core.db import Db
 
 from core.security import CurrentUser
@@ -11,8 +11,16 @@ from services import sales_service
 router = APIRouter(prefix="/sales", tags=["sales"])
 
 
+class SaleItemIn(BaseModel):
+    product_id: str
+    quantity: int = Field(gt=0, le=1_000_000)
+    unit_price: float | None = Field(default=None, ge=0)  # defaults to the product's price
+
+
 class SaleCreate(BaseModel):
-    amount: float
+    amount: float | None = None  # required only when there are no items
+    items: list[SaleItemIn] | None = Field(default=None, max_length=200)
+    skip_invalid_items: bool = False
     category: str = "general"
     description: str | None = None
     customer_name: str | None = None
@@ -33,10 +41,13 @@ def create_sale(payload: SaleCreate, user: CurrentUser = Depends(get_current_use
         return sales_service.create_sale(
             db, org_id=user.org_id, user_id=user.user_id, amount=payload.amount,
             category=payload.category, description=payload.description, customer_name=payload.customer_name,
-            customer_id=payload.customer_id,
+            customer_id=payload.customer_id, items=[i.model_dump() for i in payload.items] if payload.items else None,
+            skip_invalid_items=payload.skip_invalid_items,
         )
     except sales_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except sales_service.InsufficientStockError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except sales_service.ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -67,6 +78,6 @@ def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(g
 @router.delete("/{sale_id}", status_code=204)
 def delete_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
-        sales_service.delete_sale(db, org_id=user.org_id, sale_id=sale_id)
+        sales_service.delete_sale(db, org_id=user.org_id, sale_id=sale_id, user_id=user.user_id)
     except sales_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

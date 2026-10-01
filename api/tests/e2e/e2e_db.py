@@ -48,7 +48,12 @@ def purge_org(db, org_id: str) -> None:
     for sql in (
         "DELETE FROM agent_logs WHERE org_id = ?",
         "DELETE FROM agent_jobs WHERE org_id = ?",
+        "DELETE FROM sale_items WHERE org_id = ?",
         "DELETE FROM sales WHERE org_id = ?",
+        "DELETE FROM cash_ledger WHERE org_id = ?",
+        "DELETE FROM cash_accounts WHERE org_id = ?",
+        "DELETE FROM customers WHERE org_id = ?",
+        "DELETE FROM products WHERE org_id = ?",
         "DELETE FROM expenses WHERE org_id = ?",
         "UPDATE orgs SET owner_id = NULL WHERE id = ?",
         "DELETE FROM users WHERE org_id = ?",

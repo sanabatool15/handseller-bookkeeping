@@ -1,10 +1,22 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { api } from "./api-client";
+import { api, ApiError } from "./api-client";
 import { LedgerEntry, LedgerEntryInput } from "./types";
 
 export type LedgerKind = "sales" | "expenses";
+
+/** Human-readable message for API failures (404 unknown product, 409 not enough stock, 422 validation). */
+export function ledgerErrorMessage(e: unknown, fallback: string): string {
+  if (e instanceof ApiError) {
+    // FastAPI body-validation errors arrive as an array, which api-client stringifies to "[object Object]".
+    if (e.status === 422 && e.message.includes("[object Object]")) {
+      return "Please check the values you entered.";
+    }
+    if (e.status === 409 || e.status === 422 || e.status === 404) return e.message;
+  }
+  return fallback;
+}
 
 export function useLedger(kind: LedgerKind) {
   const [entries, setEntries] = useState<LedgerEntry[]>([]);
@@ -29,9 +41,10 @@ export function useLedger(kind: LedgerKind) {
     refresh();
   }, [refresh]);
 
-  async function create(input: LedgerEntryInput) {
-    await api.post(`/${kind}`, input);
+  async function create(input: LedgerEntryInput): Promise<LedgerEntry> {
+    const created = await api.post<LedgerEntry>(`/${kind}`, input);
     await refresh();
+    return created;
   }
 
   async function update(id: string, input: Partial<LedgerEntryInput>) {

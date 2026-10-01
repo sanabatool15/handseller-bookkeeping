@@ -37,26 +37,112 @@ class RecDb:
         return self.rowcount
 
 
-def test_create_sale_params_and_output_into():
-    db = RecDb([{"id": "s1"}])
-    sales_repo.create_sale(db, org_id="o1", created_by="u1", amount=12.34, category="c", description="d", customer_name="n")
+class ProcDb(RecDb):
+    """Returns the OUTPUT row of the EXEC batch first, then whatever `rows` says for the read-backs."""
+
+    def __init__(self, proc_row, rows=None):
+        super().__init__(rows)
+        self.proc_row, self.rollbacks = proc_row, 0
+
+    def query_one(self, sql, params=()):
+        self.calls.append((sql, tuple(params)))
+        if "usp_" in sql:
+            return self.proc_row
+        return self.rows[0] if self.rows else None
+
+    def rollback(self):
+        self.rollbacks += 1
+
+
+def _proc_row(**kw):
+    base = {"sale_id": "s1", "total": 5, "status": "committed", "message": "ok", "error_number": None, "skipped_items": None}
+    return {**base, **kw}
+
+
+def test_record_sale_execs_procedure_with_json_items_and_reads_back_scoped():
+    db = ProcDb(_proc_row(), [{"id": "s1", "org_id": "o1"}])
+    out = sales_repo.record_sale(db, org_id="o1", created_by="u1", customer_id=None, customer_name="n", category="c",
+                                description=None, amount=None, items=[{"product_id": "p1", "quantity": 2}], skip_invalid_items=False)
     sql, p = db.calls[0]
-    assert "OUTPUT" in sql and "INTO @o" in sql and "SELECT * FROM @o" in sql  # trigger-safe
-    assert p[:2] == ("o1", "u1") and p[2] == decimal.Decimal("12.34")
-    assert p[3:6] == ("c", "n", "d") and isinstance(p[6], dt.date)
+    assert "EXEC dbo.usp_RecordSale" in sql and "@sale_id = @sale_id OUTPUT" in sql and sql.count("?") == len(p) == 9
+    assert p[0] == "o1" and p[6] is None and json.loads(p[7]) == [{"product_id": "p1", "quantity": 2}] and p[8] == 0
+    assert out["status"] == "committed" and out["sale"]["id"] == "s1" and isinstance(out["sale"]["items"], list)
+    assert db.calls[1][1] == ("s1", "o1")  # read-back scoped by id AND org_id
+
+
+def test_record_sale_quick_sale_sends_decimal_amount_and_no_items():
+    db = ProcDb(_proc_row(), [{"id": "s1"}])
+    sales_repo.record_sale(db, org_id="o1", created_by="u1", customer_id="c1", customer_name=None, category="c",
+                           description="d", amount=12.34, items=None, skip_invalid_items=True)
+    p = db.calls[0][1]
+    assert p[2] == "c1" and p[6] == decimal.Decimal("12.34") and p[7] is None and p[8] == 1
+
+
+def test_record_sale_business_rollback_returns_outcome_without_sale():
+    db = ProcDb(_proc_row(status="rolled_back", error_number=50001, message="Not enough stock for Mug", sale_id=None))
+    out = sales_repo.record_sale(db, org_id="o1", created_by="u1", customer_id=None, customer_name=None, category="c",
+                                description=None, amount=None, items=[{"product_id": "p", "quantity": 1}], skip_invalid_items=False)
+    assert out["status"] == "rolled_back" and out["error_number"] == 50001 and out["sale"] is None and len(db.calls) == 1
+
+
+def test_record_sale_partial_parses_skipped_json():
+    skipped = json.dumps([{"product_id": "p2", "quantity": 9, "error_number": 50001, "reason": "Not enough stock for X"}])
+    db = ProcDb(_proc_row(status="partial", skipped_items=skipped), [{"id": "s1"}])
+    out = sales_repo.record_sale(db, org_id="o1", created_by="u1", customer_id=None, customer_name=None, category="c",
+                                description=None, amount=None, items=[{"product_id": "p", "quantity": 1}], skip_invalid_items=True)
+    assert out["status"] == "partial" and out["skipped_items"][0]["reason"] == "Not enough stock for X"
+
+
+def test_record_sale_engine_error_rolls_back_and_raises_with_number_for_deadlock_detection():
+    from core.db import is_deadlock
+
+    db = ProcDb(_proc_row(status="rolled_back", error_number=1205, message="deadlock victim", sale_id=None))
+    with pytest.raises(sales_repo.ProcedureError) as exc:
+        sales_repo.record_sale(db, org_id="o1", created_by="u1", customer_id=None, customer_name=None, category="c",
+                               description=None, amount=5, items=None, skip_invalid_items=False)
+    assert db.rollbacks == 1 and is_deadlock(exc.value)
+
+
+def test_void_sale_execs_procedure_scoped_and_maps_status():
+    db = ProcDb({"status": "voided", "message": "m", "error_number": None})
+    assert sales_repo.void_sale(db, org_id="o1", sale_id="s1", voided_by="u1") == {"status": "voided", "message": "m"}
+    sql, p = db.calls[0]
+    assert "EXEC dbo.usp_VoidSale" in sql and p == ("o1", "s1", "u1")
+    nf = ProcDb({"status": "not_found", "message": "Sale not found", "error_number": 50006})
+    assert sales_repo.void_sale(nf, org_id="o2", sale_id="s1", voided_by=None)["status"] == "not_found"
+    bad = ProcDb({"status": "rolled_back", "message": "x", "error_number": 1205})
+    with pytest.raises(sales_repo.ProcedureError):
+        sales_repo.void_sale(bad, org_id="o1", sale_id="s1", voided_by=None)
+    assert bad.rollbacks == 1
 
 
 def test_scoped_statements_send_id_then_org_id():
     db = RecDb([{"id": "s1"}])
     sales_repo.get_sale_scoped(db, sale_id="s1", org_id="o1")
-    assert db.calls[-1][1] == ("s1", "o1")
+    assert db.calls[0][1] == ("s1", "o1") and db.calls[1][1] == ("s1", "o1")  # sale, then its items
+    assert "si.sale_id = ? AND si.org_id = ?" in db.calls[1][0]
+    db = RecDb([{"id": "s1"}])
     sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"amount": 5.0})
-    sql, p = db.calls[-1]
-    assert p[-2:] == ("s1", "o1") and p[0] == decimal.Decimal("5.0") and p[1:4] == (None, None, None)
+    sql, p = db.calls[0]
+    assert p[-2:] == ("s1", "o1") and p[0] == "o1" and p[1] == decimal.Decimal("5.0") and p[2:5] == (None, None, None)
     assert "WHERE id = ? AND org_id = ?" in sql
-    assert sales_repo.delete_sale_scoped(db, sale_id="s1", org_id="o1") is True
-    assert db.calls[-1][1] == ("s1", "o1")
-    assert sales_repo.delete_sale_scoped(RecDb(rowcount=0), sale_id="s1", org_id="o2") is False
+    assert "EXISTS (SELECT 1 FROM sale_items" in sql  # amount of an item sale is left alone, in the same statement
+
+
+def test_list_sales_attaches_items_with_one_scoped_json_query():
+    class TwoDb(RecDb):
+        def query(self, sql, params=()):
+            self.calls.append((sql, tuple(params)))
+            if "FROM sale_items" in sql:
+                return [{"sale_id": "s2", "product_id": "p"}]
+            return [{"id": "s1"}, {"id": "s2"}]
+
+    db = TwoDb()
+    out = sales_repo.list_sales(db, org_id="o1", limit=5, offset=0)
+    assert out[0]["items"] == [] and out[1]["items"] == [{"sale_id": "s2", "product_id": "p"}]
+    sql, p = db.calls[1]
+    assert "OPENJSON(?)" in sql and "si.org_id = ?" in sql and p[0] == "o1" and json.loads(p[1]) == ["s1", "s2"]
+
 
 
 def test_update_rejects_unknown_columns_without_touching_db():
@@ -162,19 +248,25 @@ def test_product_listing_low_stock_variant_and_paging():
     assert "stock_qty <= reorder_level" in db.calls[1][0] and db.calls[1][1] == ("o1", 20, 10)
 
 
-def test_sale_insert_and_update_carry_customer_id():
+def test_sale_update_carries_customer_id_flag():
     db = RecDb([{"id": "s1"}])
-    sales_repo.create_sale(db, org_id="o1", created_by="u1", amount=1, category="c", description=None, customer_name=None, customer_id="c1")
-    sql, p = db.calls[0]
-    assert "customer_id" in sql and p[-1] == "c1" and len(p) == 8
-    sales_repo.create_sale(db, org_id="o1", created_by="u1", amount=1, category="c", description=None, customer_name=None)
-    assert db.calls[1][1][-1] is None  # optional: NULL when absent
     sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"amount": 2.0})
-    assert db.calls[2][1][4:6] == (0, None) and db.calls[2][1][-2:] == ("s1", "o1")  # flag 0 = leave customer_id alone
+    assert db.calls[0][1][5:7] == (0, None) and db.calls[0][1][-2:] == ("s1", "o1")  # flag 0 = leave customer_id alone
     sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"customer_id": None})
-    assert db.calls[3][1][4:6] == (1, None)  # present null = unlink
+    assert db.calls[2][1][5:7] == (1, None)  # present null = unlink
     sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"customer_id": "c9"})
-    assert db.calls[4][1][4:6] == (1, "c9")
+    assert db.calls[4][1][5:7] == (1, "c9")
+
+
+def test_cash_repository_statements_are_org_scoped():
+    from repository import cash_repository as cash_repo
+
+    db = RecDb([{"balance": decimal.Decimal("12.50"), "updated_at": "t"}])
+    assert cash_repo.get_balance(db, org_id="o1") == {"balance": 12.5, "updated_at": "t"}
+    assert db.calls[0][1] == ("o1",) and "WHERE org_id = ?" in db.calls[0][0]
+    assert cash_repo.get_balance(RecDb(), org_id="o1") == {"balance": 0.0, "updated_at": None}
+    cash_repo.list_ledger(db, org_id="o1", limit=10, offset=20)
+    assert db.calls[1][1] == ("o1", 20, 10) and "FROM cash_ledger WHERE org_id = ?" in db.calls[1][0]
 
 
 def test_create_customer_params_and_output_into():

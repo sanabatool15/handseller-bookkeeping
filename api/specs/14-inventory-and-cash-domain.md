@@ -32,8 +32,8 @@ This spec grows slice by slice. Each section says what was built, why, where it 
 
 ### Not covered / limitations
 * T-SQL has not been executed (no SQL Server in the authoring sandbox); the in-memory fakes only model the semantics.
-* No stock-movement history: `reason` on adjust-stock is validated but not stored. No link from sales to products yet (later slice).
-* Hard delete only; once sales reference products, deletion must become soft (`is_active = 0`) or be blocked by FK.
+* No stock-movement history: `reason` on adjust-stock is validated but not stored. No link from sales to products yet (later slice). *(Annotation, F3: `sale_items` now links sales to products and `usp_RecordSale` decrements stock.)*
+* Hard delete only; once sales reference products, deletion must become soft (`is_active = 0`) or be blocked by FK. *(Annotation, F3: the FK now blocks deleting a sold product, surfacing as HTTP 500; see specs/17 #41.)*
 * No search/text filter on the API (the UI filters client-side over the first 200 rows).
 
 ## F2: Customers
@@ -79,3 +79,43 @@ This spec grows slice by slice. Each section says what was built, why, where it 
 * T-SQL not executed (see F1). The fakes model the semantics only (e.g. LIKE escaping is verified on the statement/params, executed only by the gated tests).
 * No pagination metadata and no sorting options; no per-customer sales list endpoint (use `GET /sales` and filter client side). Customers are hard-deleted (when allowed).
 * `PUT /sales` cannot yet change `sale_date`; the summary's `last_sale_date` is the business date, not `created_at`.
+
+## F3: Sale line items, cash ledger and atomic `usp_RecordSale`
+
+### What
+* `sql_server/05_sale_items_cash_recordsale.sql` (re-runnable): `sale_items` (`quantity > 0`, `unit_price >= 0`, `line_total` = persisted computed column
+  `quantity * unit_price`, composite FKs `(sale_id, org_id) -> sales(id, org_id)` with `ON DELETE CASCADE` and `(product_id, org_id) -> products(id, org_id)`),
+  `cash_accounts` (one row per org, `balance`), `cash_ledger` (append-only journal: `entry_type` in `sale | sale_void | expense | adjustment`, signed `amount`,
+  `ref_type/ref_id`, `balance_after`, `entry_date`, `created_by`), `UQ_sales_id_org` / `UQ_products_id_org` (targets of the composite FKs), `idx_*_org_id`, `updated_at` triggers.
+* Procedures `dbo.usp_RecordSale` and `dbo.usp_VoidSale` (heavily commented, they are course material). `cash_accounts` is created lazily inside the procedure.
+* `repository/sales_repository.py` (`record_sale`, `void_sale`, items read-back), new `repository/cash_repository.py` + `services/cash_service.py` + `routers/cash_router.py`
+  (`GET /cash/balance`, `GET /cash/ledger`). UI: line-items editor in the sale form, item count + item list in the sales table, "Skip invalid items" checkbox, cash balance KPI on the dashboard.
+* Endpoint contract: `api/README.md` (F3 table).
+
+### Why (design decisions)
+* **Why the stock decrement is ONE statement** `UPDATE products SET stock_qty = stock_qty - @q WHERE id = @p AND org_id = @o AND stock_qty >= @q` and `@@ROWCOUNT` is the verdict.
+  The "read then write" alternative (`SELECT stock ...; if stock >= q: UPDATE ... SET stock_qty = <value computed in the app>`) has a gap between the read and the write:
+  two buyers both read "1 left", both pass the check, both write; one unit is sold twice (lost update / oversell). With one statement the engine takes the row lock, evaluates
+  the guard on the committed value and writes, with no gap. Concurrent buyers queue on the lock; the loser re-evaluates after the winner commits, sees `0`, and updates zero rows.
+  `CHECK (stock_qty >= 0)` stays as the last line of defence. Zero rows is ambiguous (unknown product vs. not enough stock) - a follow-up `SELECT name` only picks the MESSAGE, the decision was already taken atomically.
+* **All-or-nothing by default, savepoints for partial.** `skip_invalid_items = 0`: the first bad item rolls back the whole sale. `= 1`: each item runs after `SAVE TRANSACTION sp_item`; a bad item is undone with
+  `ROLLBACK TRANSACTION sp_item` and recorded in the `@skipped` table variable (table variables are not rolled back); valid items are kept (`partial`). If NO item is usable the whole sale is rolled back with the first reason.
+* **Business errors are OUTPUT values, not raised errors.** With `XACT_ABORT ON` any raised error dooms the transaction (`XACT_STATE() = -1`), and then only a FULL rollback is possible, which would also destroy a caller's transaction.
+  Numbers: 50001 insufficient stock (409), 50002 unknown/foreign product (404), 50003 validation (422), 50004 customer not found (404), 50005 org not found, 50006 sale not found. Engine errors (1205 deadlock, 547, ...) are caught by `CATCH`,
+  reported as `rolled_back` and re-raised by the repository as `ProcedureError` (the deadlock retry in the service recognises 1205).
+* **Cash**: `cash_accounts.balance` is updated in the same transaction by an atomic `balance = balance + @total` (`OUTPUT ... INTO` because of the trigger); the ledger row stores `balance_after`. Invariant (tested): balance == SUM(ledger.amount) per org.
+  The hot-row update is the LAST statement of the transaction, so the lock is held briefly. First-sale creation of the account uses `UPDLOCK, HOLDLOCK` on the key range so two concurrent first sales cannot both insert.
+* **Lock order**: items are processed sorted by `product_id`, so two sales with the same products lock them in the same order (fewer deadlocks). Remaining deadlocks are retried (`run_with_deadlock_retry`, up to 3 times, `on_event` hook for later logging).
+* **Void** reverses what the ledger says was posted for that sale (not blindly `sales.amount`): sales that predate the cash ledger (no `sale` row) change no balance; a quick sale whose amount was edited is reversed by the posted amount, so balance == ledger sum always holds.
+* **PUT /sales/{id}** updates metadata. For a sale WITH items an `amount` change is 422 (the amount is the sum of the lines; enforced in the same UPDATE statement as well: `CASE WHEN EXISTS (items) THEN amount ELSE ...`). Quick sales may still change `amount`, but that edit does NOT post an adjustment to the cash ledger (specs/17 #40).
+* **Product delete**: the FK from `sale_items` blocks deleting a product that has been sold (error 547 -> HTTP 500 today; specs/17 #41).
+* Rows are scoped by `org_id` in every statement of the procedures (static test over the .sql file) and in the repository.
+
+### Where tested
+* Unit `tests/unit/test_sales_items_service.py` (fakes with the same semantics: atomic, savepoint partial, stock never negative, balance == ledger sum, org scoping, void, deadlock retry once / give up / non-deadlock not retried),
+  integration `tests/integration/test_sales_items_api.py` (201/409/404/422, nothing changed after 409, void, cross-tenant, idempotent replay, back-compat quick sale), `tests/unit/test_repository_sql_shapes.py` and `test_repository_sql_rules.py` (EXEC shape, org scoping, static scan of `05_*.sql`).
+* Real DB (gated `RUN_MSSQL=1`): `tests/sqlserver/test_sales_items_sqlserver.py` (commit, atomic rollback, savepoint partial, own vs nested transaction, concurrent buyers of the last unit, balance == ledger sum, void, constraints).
+  Manual: `sql_server/TEST_CASES.md` F3-01..F3-12.
+
+### Not covered / limitations
+* T-SQL is unrun in the authoring sandbox. `expense` ledger entries are not posted yet (the entry type exists; expenses do not touch cash). No stock-movement history. No partial void / returns. A hot `cash_accounts` row serialises the commit of all sales of one org (fine at this scale).

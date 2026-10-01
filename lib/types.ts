@@ -17,6 +17,50 @@ export interface AuthResponse {
   org?: Org;
 }
 
+export interface SaleItem {
+  id: string;
+  org_id: string;
+  sale_id: string;
+  product_id: string;
+  product_name: string;
+  quantity: number;
+  unit_price: number;
+  line_total: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SaleItemInput {
+  product_id: string;
+  quantity: number;
+  unit_price?: number | null; // omitted = the product's current price
+}
+
+export interface SkippedSaleItem {
+  product_id: string | null;
+  quantity: number | null;
+  error_number: number;
+  reason: string;
+}
+
+export interface CashBalance {
+  balance: number;
+  updated_at: string | null;
+}
+
+export interface CashLedgerEntry {
+  id: string;
+  org_id: string;
+  entry_type: "sale" | "sale_void" | "expense" | "adjustment";
+  amount: number; // signed
+  ref_type: string | null;
+  ref_id: string | null;
+  balance_after: number;
+  entry_date: string;
+  created_by: string | null;
+  created_at: string;
+}
+
 export interface LedgerEntry {
   id: string;
   org_id: string;
@@ -29,12 +73,16 @@ export interface LedgerEntry {
   voucher_reference?: string | null;
   sale_date?: string;
   expense_date?: string;
+  items?: SaleItem[]; // sales only (empty for quick sales)
+  skipped_items?: SkippedSaleItem[]; // only in the POST response of a partial sale
   created_at: string;
   updated_at: string;
 }
 
 export interface LedgerEntryInput {
-  amount: number;
+  amount?: number; // required unless `items` is given (the total is then the sum of the lines)
+  items?: SaleItemInput[]; // sales only, create only
+  skip_invalid_items?: boolean; // sales only: keep valid lines when some are invalid
   category?: string;
   description?: string | null;
   customer_name?: string | null;

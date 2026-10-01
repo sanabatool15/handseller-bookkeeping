@@ -17,7 +17,7 @@ import re
 import pytest
 
 REPO_DIR = pathlib.Path(__file__).resolve().parents[2] / "repository"
-TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers"}
+TENANT_TABLES = {"users", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers", "sale_items", "cash_accounts", "cash_ledger"}
 ROOT_TABLES = {"orgs"}
 SQL_START = re.compile(r"^\s*(/\*.*?\*/\s*)?(SET\s+NOCOUNT|DECLARE|SELECT|INSERT|UPDATE|DELETE|WITH|MERGE)\b", re.I | re.S)
 TABLE_REF = re.compile(r"\b(?:FROM|JOIN|UPDATE|INTO|DELETE\s+FROM)\s+(?:dbo\.)?([A-Za-z_][A-Za-z0-9_]*)", re.I)
@@ -139,14 +139,14 @@ def test_by_id_statements_include_org_id():
 def test_guard_sees_sql_in_dicts_and_new_repositories():
     """The guard must cover the F0b repositories and dict-held SQL (base._OWNERSHIP_SQL)."""
     seen = {p.name for p, _, sql, _ in _all() if sql}
-    assert {"sales_repository.py", "expenses_repository.py", "agent_jobs_repository.py", "products_repository.py", "customers_repository.py", "base.py"} <= seen
+    assert {"sales_repository.py", "expenses_repository.py", "agent_jobs_repository.py", "products_repository.py", "customers_repository.py", "cash_repository.py", "base.py"} <= seen
     base_sql = [sql for p, _, sql, _ in _all() if p.name == "base.py" and sql]
     assert any("FROM sales WHERE id = ? AND org_id = ?" in q for q in base_sql)
 
 
 def test_every_tenant_table_has_a_repository_statement_with_org_id():
     text = " ".join(sql for _, _, sql, _ in _all() if sql)
-    for table in ("sales", "expenses", "agent_jobs", "agent_logs", "products", "customers"):
+    for table in ("sales", "expenses", "agent_jobs", "agent_logs", "products", "customers", "sale_items", "cash_accounts", "cash_ledger"):
         assert re.search(rf"\b{table}\b[^;]*\borg_id\b", text, re.I), table
 
 
@@ -200,3 +200,41 @@ def test_customers_search_is_parameterised_like_with_escape():
 def test_sales_customer_id_checked_via_get_ownership_allow_list():
     base_sql = [sql for p, _, sql, _ in _all() if p.name == "base.py" and sql]
     assert any("FROM customers WHERE id = ? AND org_id = ?" in q for q in base_sql)
+
+
+def _sales_sql():
+    return {s for p, _, s, _ in _all() if p.name == "sales_repository.py" and s}
+
+
+def test_sale_procedures_are_executed_with_parameters_only():
+    """record/void go through EXEC with ? placeholders: org_id is a procedure parameter, nothing is interpolated."""
+    execs = [s for s in _sales_sql() if "EXEC dbo.usp_" in s]
+    assert {"usp_RecordSale", "usp_VoidSale"} == {m for s in execs for m in re.findall(r"usp_\w+", s)}
+    for stmt in execs:
+        assert "@org_id = ?" in stmt and "%" not in stmt
+
+
+def test_sale_items_reads_are_scoped_by_org_id_on_both_joined_tables():
+    stmt = next(s for s in _sales_sql() if "FROM sale_items si JOIN products p" in s and "si.sale_id = ?" in s)
+    assert "p.org_id = si.org_id" in stmt and "si.org_id = ?" in stmt
+
+
+def test_sales_update_leaves_amount_alone_when_items_exist_in_same_statement():
+    stmt = next(s for s in _sales_sql() if s.lstrip().startswith("SET NOCOUNT ON; DECLARE @o") and "UPDATE sales" in s)
+    assert "sale_items.org_id = ?" in stmt and "WHERE id = ? AND org_id = ?" in stmt
+
+
+def test_sale_procedure_sql_scopes_every_tenant_statement_by_org_id():
+    """Static check of sql_server/05: every statement in the procedures that touches a tenant table mentions org_id."""
+    sql = (REPO_DIR.parents[1] / "sql_server" / "05_sale_items_cash_recordsale.sql").read_text()
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)  # block comments first (they may contain "--")
+    sql = re.sub(r"--[^\n]*", "", sql)
+    body = sql[sql.index("CREATE OR ALTER PROCEDURE dbo.usp_RecordSale"):]
+    tenant = r"(?:dbo\.)?(sales|sale_items|products|customers|cash_accounts|cash_ledger)\b"
+    bad = []
+    for stmt in re.split(r";", body):
+        if re.search(r"\b(FROM|JOIN|UPDATE|INTO|DELETE\s+FROM)\s+" + tenant, stmt, re.I) and not re.search(r"\borg_id\b", stmt, re.I):
+            bad.append(" ".join(stmt.split())[:90])
+    assert not bad, bad
+    assert "SET XACT_ABORT ON" in body and body.count("SET XACT_ABORT ON") == 2
+    assert "stock_qty >= @qty" in body and "SAVE TRANSACTION sp_item" in body and "XACT_STATE()" in body

@@ -52,7 +52,10 @@ def tenants(real_db):
     yield make
     real_db.rollback()
     for t in made:
+        real_db.execute("DELETE FROM sale_items WHERE org_id = ?", (t.org_id,))
         real_db.execute("DELETE FROM sales WHERE org_id = ?", (t.org_id,))
+        real_db.execute("DELETE FROM cash_ledger WHERE org_id = ?", (t.org_id,))
+        real_db.execute("DELETE FROM cash_accounts WHERE org_id = ?", (t.org_id,))
         real_db.execute("DELETE FROM customers WHERE org_id = ?", (t.org_id,))
         real_db.execute("UPDATE orgs SET owner_id = NULL WHERE id = ?", (t.org_id,))
         real_db.execute("DELETE FROM users WHERE org_id = ?", (t.org_id,))

@@ -32,8 +32,12 @@ class FakeSqlStore:
         self.agent_logs: dict[str, dict[str, Any]] = {}
         self.products: dict[str, dict[str, Any]] = {}
         self.customers: dict[str, dict[str, Any]] = {}
+        self.sale_items: dict[str, dict[str, Any]] = {}
+        self.cash_accounts: dict[str, dict[str, Any]] = {}   # keyed by org_id
+        self.cash_ledger: dict[str, dict[str, Any]] = {}
 
-    _TABLES = ("users", "orgs", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers")
+    _TABLES = ("users", "orgs", "sales", "expenses", "agent_jobs", "agent_logs", "products", "customers",
+               "sale_items", "cash_accounts", "cash_ledger")
 
     def snapshot(self):
         return copy.deepcopy({t: getattr(self, t) for t in self._TABLES})
@@ -192,14 +196,137 @@ def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: s
     }
 
 
+def _round2(x: float) -> float:
+    return round(float(x) + 0.0, 2)
+
+
 def build_sales_fakes(store: FakeSqlStore) -> dict[str, Any]:
+    """Fakes for sales + the two stored procedures. record_sale/void_sale mirror usp_RecordSale/usp_VoidSale:
+    all-or-nothing unless skip_invalid_items, stock never negative (the guarded decrement), cash balance +
+    ledger posted in the same step, everything scoped by org_id. They work on copies and apply the result at the
+    end, which is how a rollback looks from the outside (and FakeSqlDb.rollback() restores the store anyway)."""
     fakes = _ledger_fakes(store, table="sales", singular="sale", date_col="sale_date", extra_col="customer_name",
                           link_cols=("customer_id",))
-    inner = fakes["create_sale"]
-    fakes["create_sale"] = lambda db, *, org_id, created_by, amount, category, description, customer_name, customer_id=None: inner(
-        db, org_id=org_id, created_by=created_by, amount=amount, category=category, description=description,
-        customer_name=customer_name, customer_id=customer_id)
+    fakes.pop("create_sale")
+    fakes.pop("delete_sale_scoped")
+    base_get, base_list, base_update = fakes["get_sale_scoped"], fakes["list_sales"], fakes["update_sale_scoped"]
+
+    def _items_of(sale_id: str, org_id: str) -> list[dict]:
+        rows = [dict(i) for i in store.sale_items.values() if i["sale_id"] == sale_id and i["org_id"] == org_id]
+        return sorted(rows, key=lambda r: r["created_at"])
+
+    def _with_items(sale: Optional[dict]) -> Optional[dict]:
+        if sale is not None:
+            sale["items"] = _items_of(sale["id"], sale["org_id"])
+        return sale
+
+    def get_sale_scoped(db, *, sale_id, org_id):
+        return _with_items(base_get(db, sale_id=sale_id, org_id=org_id))
+
+    def list_sales(db, *, org_id, limit=100, offset=0):
+        return [_with_items(s) for s in base_list(db, org_id=org_id, limit=limit, offset=offset)]
+
+    def update_sale_scoped(db, *, sale_id, org_id, updates):
+        has_items = bool(_items_of(sale_id, org_id))
+        if has_items:  # the real statement leaves amount untouched for item sales
+            updates = {k: v for k, v in updates.items() if k != "amount"}
+        return _with_items(base_update(db, sale_id=sale_id, org_id=org_id, updates=updates))
+
+    def _post_cash(org_id, entry_type, amount, ref_id, created_by, entry_date=None) -> None:
+        acct = store.cash_accounts.setdefault(org_id, {"org_id": org_id, "balance": 0.0, "created_at": _now(), "updated_at": _now()})
+        acct["balance"] = _round2(acct["balance"] + amount)
+        acct["updated_at"] = _now()
+        row = {"id": str(uuid.uuid4()), "org_id": org_id, "entry_type": entry_type, "amount": _round2(amount),
+               "ref_type": "sale", "ref_id": ref_id, "balance_after": acct["balance"],
+               "entry_date": entry_date or repo_base.today_utc().isoformat(), "created_by": created_by,
+               "created_at": _now(), "updated_at": _now()}
+        store.cash_ledger[row["id"]] = row
+
+    def record_sale(db, *, org_id, created_by, customer_id, customer_name, category, description, amount, items,
+                    skip_invalid_items) -> dict:
+        def rolled_back(number: int, message: str) -> dict:
+            return {"status": "rolled_back", "message": message, "error_number": number, "skipped_items": [], "sale": None}
+
+        if items is None and (amount is None or amount <= 0):
+            return rolled_back(50003, "amount must be positive when no items are given")
+        if customer_id is not None:
+            c = store.customers.get(customer_id)
+            if not c or c["org_id"] != org_id:
+                return rolled_back(50004, "Customer not found")
+        sale_id = str(uuid.uuid4())
+        stock = {pid: p["stock_qty"] for pid, p in store.products.items() if p["org_id"] == org_id}
+        lines: list[dict] = []
+        skipped: list[dict] = []
+        ordered = sorted(enumerate(items or []), key=lambda t: (t[1]["product_id"], t[0]))  # same order as the proc
+        for _, it in ordered:
+            pid, qty = it["product_id"], it["quantity"]
+            err = None
+            if qty is None or qty <= 0:
+                err = (50003, "Each item needs a product_id and a quantity greater than 0")
+            elif it.get("unit_price") is not None and it["unit_price"] < 0:
+                err = (50003, "unit_price must not be negative")
+            elif pid not in stock:
+                err = (50002, "Product not found")
+            elif stock[pid] < qty:  # UPDATE ... WHERE stock_qty >= qty touched 0 rows
+                err = (50001, f"Not enough stock for {store.products[pid]['name']}")
+            if err is None:
+                stock[pid] -= qty
+                price = it["unit_price"] if it.get("unit_price") is not None else store.products[pid]["price"]
+                lines.append({"id": str(uuid.uuid4()), "org_id": org_id, "sale_id": sale_id, "product_id": pid,
+                              "product_name": store.products[pid]["name"], "quantity": qty, "unit_price": float(price),
+                              "line_total": _round2(qty * price), "created_at": _now(), "updated_at": _now()})
+            elif skip_invalid_items:
+                skipped.append({"product_id": pid, "quantity": qty, "error_number": err[0], "reason": err[1]})
+            else:
+                return rolled_back(*err)
+        if items and not lines:  # nothing usable => whole sale rolled back with the first reason
+            return rolled_back(skipped[0]["error_number"], skipped[0]["reason"]) if skipped else rolled_back(50003, "No valid items")
+        total = _round2(sum(l["line_total"] for l in lines)) if items else _round2(amount)
+        # ---- "commit": apply everything ----
+        for pid, qty in stock.items():
+            store.products[pid]["stock_qty"] = qty
+            store.products[pid]["updated_at"] = _now()
+        sale = {"id": sale_id, "org_id": org_id, "created_by": created_by, "amount": total, "category": category,
+                "customer_name": customer_name, "description": description, "sale_date": repo_base.today_utc().isoformat(),
+                "customer_id": customer_id, "created_at": _now(), "updated_at": _now()}
+        store.sales[sale_id] = sale
+        for l in lines:
+            store.sale_items[l["id"]] = l
+        _post_cash(org_id, "sale", total, sale_id, created_by)
+        return {"status": "partial" if skipped else "committed", "message": "Sale recorded", "error_number": None,
+                "skipped_items": skipped, "sale": get_sale_scoped(db, sale_id=sale_id, org_id=org_id)}
+
+    def void_sale(db, *, org_id, sale_id, voided_by) -> dict:
+        sale = store.sales.get(sale_id)
+        if not sale or sale["org_id"] != org_id:
+            return {"status": "not_found", "message": "Sale not found"}
+        for it in _items_of(sale_id, org_id):
+            store.products[it["product_id"]]["stock_qty"] += it["quantity"]
+            del store.sale_items[it["id"]]
+        posted = sum(e["amount"] for e in store.cash_ledger.values()
+                     if e["org_id"] == org_id and e["ref_id"] == sale_id and e["entry_type"] == "sale")
+        if posted:
+            _post_cash(org_id, "sale_void", -posted, sale_id, voided_by)
+        del store.sales[sale_id]
+        return {"status": "voided", "message": "Sale voided"}
+
+    fakes.update(get_sale_scoped=get_sale_scoped, list_sales=list_sales, update_sale_scoped=update_sale_scoped,
+                 record_sale=record_sale, void_sale=void_sale)
     return fakes
+
+
+def build_cash_fakes(store: FakeSqlStore) -> dict[str, Any]:
+    def get_balance(db, *, org_id) -> dict:
+        acct = store.cash_accounts.get(org_id)
+        return {"balance": acct["balance"], "updated_at": acct["updated_at"]} if acct else {"balance": 0.0, "updated_at": None}
+
+    def list_ledger(db, *, org_id, limit=100, offset=0) -> list[dict]:
+        limit, offset = repo_base.clamp_page(limit, offset)
+        rows = [dict(e) for e in store.cash_ledger.values() if e["org_id"] == org_id]
+        rows.sort(key=lambda r: (r["created_at"], r["id"]), reverse=True)
+        return rows[offset:offset + limit]
+
+    return {"get_balance": get_balance, "list_ledger": list_ledger}
 
 
 def build_expenses_fakes(store: FakeSqlStore) -> dict[str, Any]:
@@ -399,11 +526,13 @@ def build_ownership_fake(store: FakeSqlStore):
 
 
 def install_fake_repos(monkeypatch, store: FakeSqlStore) -> None:
-    from repository import (agent_jobs_repository, customers_repository, expenses_repository, health_repository, orgs_repository,
+    from repository import (agent_jobs_repository, cash_repository, customers_repository, expenses_repository, health_repository, orgs_repository,
                             products_repository, sales_repository, users_repository)
 
     for name, fn in build_sales_fakes(store).items():
         monkeypatch.setattr(sales_repository, name, fn)
+    for name, fn in build_cash_fakes(store).items():
+        monkeypatch.setattr(cash_repository, name, fn)
     for name, fn in build_expenses_fakes(store).items():
         monkeypatch.setattr(expenses_repository, name, fn)
     for name, fn in build_products_fakes(store).items():

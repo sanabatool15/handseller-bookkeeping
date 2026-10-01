@@ -3,12 +3,14 @@
 import { Receipt, TrendingUp, Hash } from "lucide-react";
 import { useLedger } from "@/lib/use-ledger";
 import { useCustomers } from "@/lib/use-customers";
+import { useProducts } from "@/lib/use-products";
 import { LedgerTable } from "@/components/ledger-table";
 import { KpiCard } from "@/components/kpi-card";
 
 export default function SalesPage() {
   const { entries, loading, create, update, remove } = useLedger("sales");
   const { customers } = useCustomers(); // optional dropdown; a failed load just leaves it empty
+  const { products, refresh: refreshProducts } = useProducts(); // line-items editor; stock changes with each sale
   const total = entries.reduce((sum, e) => sum + e.amount, 0);
 
   return (
@@ -34,10 +36,20 @@ export default function SalesPage() {
         kind="sales"
         entries={entries}
         loading={loading}
-        onCreate={create}
+        onCreate={async (input) => {
+          try {
+            return await create(input);
+          } finally {
+            await refreshProducts(); // stock shown in the dropdown stays current
+          }
+        }}
         onUpdate={update}
-        onDelete={remove}
+        onDelete={async (id) => {
+          await remove(id); // voiding gives the stock back
+          await refreshProducts();
+        }}
         customers={customers}
+        products={products}
       />
     </div>
   );

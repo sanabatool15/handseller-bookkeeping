@@ -1,9 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, Sparkles } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, Sparkles, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useLedger } from "@/lib/use-ledger";
+import { useCash } from "@/lib/use-cash";
 import { KpiCard } from "@/components/kpi-card";
 import { GeneralInfoCard } from "@/components/general-info-card";
 import { LedgerFormModal } from "@/components/ledger-form-modal";
@@ -15,6 +16,7 @@ import { Button } from "@/components/ui/button";
 export default function DashboardPage() {
   const sales = useLedger("sales");
   const expenses = useLedger("expenses");
+  const cash = useCash();
   const [quickAdd, setQuickAdd] = useState<"sales" | "expenses" | null>(null);
 
   const totalSales = useMemo(
@@ -73,10 +75,11 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard label="Net profit / loss" value={net} icon={DollarSign} tone="olive" />
         <KpiCard label="Total sales" value={totalSales} icon={TrendingUp} tone="accent" />
         <KpiCard label="Total expenses" value={totalExpenses} icon={TrendingDown} />
+        <KpiCard label="Cash balance" value={cash.balance} icon={Wallet} />
       </div>
 
       <GeneralInfoCard />
@@ -109,9 +112,14 @@ export default function DashboardPage() {
           kind={quickAdd}
           open={!!quickAdd}
           onOpenChange={(open) => !open && setQuickAdd(null)}
-          onSubmit={(input) =>
-            quickAdd === "sales" ? sales.create(input) : expenses.create(input)
-          }
+          onSubmit={async (input) => {
+            if (quickAdd === "sales") {
+              const created = await sales.create(input);
+              await cash.refresh();
+              return created;
+            }
+            return expenses.create(input);
+          }}
         />
       )}
     </div>
