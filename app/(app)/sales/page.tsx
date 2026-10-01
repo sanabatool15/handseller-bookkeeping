@@ -1,14 +1,16 @@
 "use client";
 
 import { Receipt, TrendingUp, Hash } from "lucide-react";
-import { useLedger } from "@/lib/use-ledger";
+import { useState } from "react";
+import { useLedger, ledgerErrorMessage } from "@/lib/use-ledger";
 import { useCustomers } from "@/lib/use-customers";
 import { useProducts } from "@/lib/use-products";
 import { LedgerTable } from "@/components/ledger-table";
 import { KpiCard } from "@/components/kpi-card";
 
 export default function SalesPage() {
-  const { entries, loading, create, update, remove } = useLedger("sales");
+  const { entries, loading, error, create, update, remove } = useLedger("sales");
+  const [actionError, setActionError] = useState<string | null>(null);
   const { customers } = useCustomers(); // optional dropdown; a failed load just leaves it empty
   const { products, refresh: refreshProducts } = useProducts(); // line-items editor; stock changes with each sale
   const total = entries.reduce((sum, e) => sum + e.amount, 0);
@@ -32,6 +34,8 @@ export default function SalesPage() {
         />
       </div>
 
+      {(actionError ?? error) && <p className="text-sm text-danger">{actionError ?? error}</p>}
+
       <LedgerTable
         kind="sales"
         entries={entries}
@@ -45,7 +49,12 @@ export default function SalesPage() {
         }}
         onUpdate={update}
         onDelete={async (id) => {
-          await remove(id); // voiding gives the stock back
+          setActionError(null);
+          try {
+            await remove(id); // voiding gives the stock back
+          } catch (e) {
+            setActionError(ledgerErrorMessage(e, "Could not delete sale"));
+          }
           await refreshProducts();
         }}
         customers={customers}

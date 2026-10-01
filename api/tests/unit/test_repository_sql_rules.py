@@ -219,9 +219,24 @@ def test_sale_items_reads_are_scoped_by_org_id_on_both_joined_tables():
     assert "p.org_id = si.org_id" in stmt and "si.org_id = ?" in stmt
 
 
-def test_sales_update_leaves_amount_alone_when_items_exist_in_same_statement():
-    stmt = next(s for s in _sales_sql() if s.lstrip().startswith("SET NOCOUNT ON; DECLARE @o") and "UPDATE sales" in s)
-    assert "sale_items.org_id = ?" in stmt and "WHERE id = ? AND org_id = ?" in stmt
+def test_sales_and_expenses_updates_never_touch_amount():
+    """Retired bypass: amount is part of the cash ledger and changes only through usp_AdjustEntryAmount."""
+    for name, table in (("sales_repository.py", "sales"), ("expenses_repository.py", "expenses")):
+        stmts = sorted({s for p, _, s, _ in _all() if p.name == name and s and f"UPDATE {table} SET" in s})
+        assert len(stmts) == 1, name
+        assert "amount" not in stmts[0][stmts[0].index("UPDATE "):].split("OUTPUT")[0] and "WHERE id = ? AND org_id = ?" in stmts[0]
+
+
+def test_no_repository_function_writes_sales_or_expenses_without_the_ledger():
+    """No plain INSERT/DELETE on sales/expenses/cash tables in repository code: those happen only inside the procedures."""
+    bad = []
+    for p, lineno, sql, _ in _all():
+        if not sql:
+            continue
+        for stmt in _statements(sql):
+            if re.search(r"\b(INSERT\s+INTO|DELETE\s+FROM)\s+(sales|expenses|cash_accounts|cash_ledger|sale_items)\b", stmt, re.I):
+                bad.append(f"{p.name}:{lineno}: {stmt.strip()[:70]}")
+    assert not bad, bad
 
 
 def test_sale_procedure_sql_scopes_every_tenant_statement_by_org_id():
@@ -238,3 +253,56 @@ def test_sale_procedure_sql_scopes_every_tenant_statement_by_org_id():
     assert not bad, bad
     assert "SET XACT_ABORT ON" in body and body.count("SET XACT_ABORT ON") == 2
     assert "stock_qty >= @qty" in body and "SAVE TRANSACTION sp_item" in body and "XACT_STATE()" in body
+
+
+def _strip_sql_comments(sql: str) -> str:
+    sql = re.sub(r"/\*.*?\*/", "", sql, flags=re.S)  # block comments first (they may contain "--")
+    return re.sub(r"--[^\n]*", "", sql)
+
+
+def test_expense_and_adjust_procedure_sql_scopes_every_tenant_statement_by_org_id():
+    """Static check of sql_server/06: every statement in the three procedures that touches a tenant table mentions org_id."""
+    sql = _strip_sql_comments((REPO_DIR.parents[1] / "sql_server" / "06_expenses_cash.sql").read_text())
+    body = sql[sql.index("CREATE OR ALTER PROCEDURE dbo.usp_RecordExpense"):]
+    tenant = r"(?:dbo\.)?(sales|sale_items|expenses|products|customers|cash_accounts|cash_ledger)\b"
+    bad = []
+    for stmt in re.split(r";", body):
+        if re.search(r"\b(FROM|JOIN|UPDATE|INTO|DELETE\s+FROM)\s+" + tenant, stmt, re.I) and not re.search(r"\borg_id\b", stmt, re.I):
+            bad.append(" ".join(stmt.split())[:90])
+    assert not bad, bad
+    assert {"usp_RecordExpense", "usp_VoidExpense", "usp_AdjustEntryAmount"} <= set(re.findall(r"CREATE OR ALTER PROCEDURE dbo\.(usp_\w+)", body))
+    assert body.count("SET XACT_ABORT ON") == 3 and body.count("XACT_STATE()") >= 6
+    assert body.count("DECLARE @own_tran") == 3 and body.count("SAVE TRANSACTION") == 3
+
+
+def test_expense_procedures_follow_the_documented_rules():
+    sql = _strip_sql_comments((REPO_DIR.parents[1] / "sql_server" / "06_expenses_cash.sql").read_text())
+    # the ledger CHECK is widened with a guarded drop/re-create (re-runnable) and allows 'expense_void'
+    assert "DROP CONSTRAINT CK_cash_ledger_entry_type" in sql and "N'expense_void'" in sql
+    assert "definition NOT LIKE N'%expense_void%'" in sql
+    # a negative cash balance is ALLOWED: the decrement has no "balance >= amount" guard
+    assert "SET balance = balance - @amount" in sql and not re.search(r"balance\s*>=", sql)
+    # the ledger delta of an adjustment: sale +delta, expense -delta
+    assert "SET @signed = @delta" in sql and "SET @signed = -@delta" in sql
+    # a sale with line items is refused (not_allowed) inside the procedure
+    assert "FROM dbo.sale_items WHERE sale_id = @ref_id AND org_id = @org_id" in sql and "N'not_allowed'" in sql
+    # business failures are OUTPUT values: no THROW / RAISERROR in the procedures
+    assert not re.search(r"\b(THROW|RAISERROR)\b", sql, re.I)
+
+
+def test_void_sale_reverses_adjustments_too():
+    """usp_VoidSale (05, F4 version) reverses the 'sale' entry AND its 'adjustment' entries, or the balance would drift."""
+    sql = _strip_sql_comments((REPO_DIR.parents[1] / "sql_server" / "05_sale_items_cash_recordsale.sql").read_text())
+    assert "ref_id = @sale_id AND entry_type IN (N'sale', N'adjustment')" in sql
+
+
+def test_cash_repository_filters_are_static_parameterised_statements():
+    stmts = {s for p, _, s, _ in _all() if p.name == "cash_repository.py" and s}
+    ledger = next(s for s in stmts if "FROM cash_ledger WHERE org_id = ?" in s and "OFFSET" in s)
+    assert ledger.count("?") == 9 and "entry_type = ?" in ledger and "entry_date >= CAST(? AS date)" in ledger
+    summary = next(s for s in stmts if "GROUP BY entry_type" in s)
+    assert "SUM(amount)" in summary and "org_id = ?" in summary
+    opening = next(s for s in stmts if "AS opening" in s)
+    assert "SUM(amount)" in opening and "org_id = ?" in opening and "entry_date < ?" in opening
+    adjust = next(s for s in stmts if "usp_AdjustEntryAmount" in s)
+    assert "@org_id = ?" in adjust and "%" not in adjust

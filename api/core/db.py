@@ -29,10 +29,16 @@ T = TypeVar("T")
 DEADLOCK_ERROR = 1205
 LOCK_TIMEOUT_ERROR = 1222
 UNIQUE_VIOLATION_ERRORS = (2627, 2601)
+CONSTRAINT_CONFLICT_ERROR = 547  # shared by CHECK and FOREIGN KEY/REFERENCE conflicts: the message text tells them apart
 
 
 class UniqueViolationError(Exception):
     """A UNIQUE constraint/index rejected the statement (SQL Server 2627/2601)."""
+
+
+class ForeignKeyViolationError(Exception):
+    """A FOREIGN KEY / REFERENCE constraint rejected the statement (SQL Server 547), e.g. deleting a row that
+    other rows still point at. CHECK-constraint 547s are NOT mapped (they stay plain driver errors)."""
 
 
 def _error_text(exc: BaseException) -> str:
@@ -51,6 +57,13 @@ def is_deadlock(exc: BaseException, *, include_lock_timeout: bool = True) -> boo
 
 def is_unique_violation(exc: BaseException) -> bool:
     return _has_code(exc, UNIQUE_VIOLATION_ERRORS)
+
+
+def is_foreign_key_violation(exc: BaseException) -> bool:
+    text = _error_text(exc)
+    return _has_code(exc, (CONSTRAINT_CONFLICT_ERROR,)) and bool(
+        re.search(r"REFERENCE constraint|FOREIGN KEY constraint", text, re.I)
+    )
 
 
 def normalise_value(value: Any) -> Any:
@@ -86,6 +99,8 @@ class Db:
                 pass
             if is_unique_violation(exc):
                 raise UniqueViolationError(_error_text(exc)) from exc
+            if is_foreign_key_violation(exc):
+                raise ForeignKeyViolationError(_error_text(exc)) from exc
             raise
         return cursor
 

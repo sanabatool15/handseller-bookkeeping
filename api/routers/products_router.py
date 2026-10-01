@@ -35,7 +35,7 @@ class StockAdjustment(BaseModel):
 def _http(exc: Exception) -> HTTPException:
     if isinstance(exc, products_service.NotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
-    if isinstance(exc, (products_service.DuplicateSkuError, products_service.InsufficientStockError)):
+    if isinstance(exc, (products_service.DuplicateSkuError, products_service.InsufficientStockError, products_service.ProductInUseError)):
         return HTTPException(status_code=409, detail=str(exc))
     return HTTPException(status_code=422, detail=str(exc))
 
@@ -45,6 +45,7 @@ _DOMAIN_ERRORS = (
     products_service.NotFoundError,
     products_service.DuplicateSkuError,
     products_service.InsufficientStockError,
+    products_service.ProductInUseError,
 )
 
 

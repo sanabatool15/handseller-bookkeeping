@@ -339,3 +339,69 @@ Pass: yes. `PUT /sales/{id}` with `amount` on an item sale: 422; `DELETE /sales/
 Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_sales_items_sqlserver.py -v` from `api/`.
 Expected: 10 tests pass (commit, atomic rollback, savepoint partial, own vs nested transaction, nested business failure, 2 race tests, void, plain sale + foreign product, constraints).
 Pass: all green; tests clean up their own rows. If the engine reports a syntax error in the procedures, fix it in `05_...sql` and re-run (the script is re-runnable); please report the message so the spec can be corrected.
+
+## Slice F4: expenses on the cash ledger, usp_RecordExpense / usp_VoidExpense / usp_AdjustEntryAmount
+
+Run `05_sale_items_cash_recordsale.sql` (F4 version: `usp_VoidSale` also reverses adjustments) and then `06_expenses_cash.sql`, each twice. `<ORG>` / `<USER>` as in F3. Output helper used below:
+`DECLARE @id uniqueidentifier, @st nvarchar(20), @msg nvarchar(400), @err int;`
+
+### F4-01 Script is re-runnable; constraint widened
+Steps: run 06 twice; `SELECT definition FROM sys.check_constraints WHERE name = 'CK_cash_ledger_entry_type'; SELECT name FROM sys.procedures WHERE name IN ('usp_RecordExpense','usp_VoidExpense','usp_AdjustEntryAmount');`
+Expected: no errors both times; the definition contains `expense_void`; 3 procedures. `INSERT cash_ledger (org_id,entry_type,amount,balance_after) VALUES ('<ORG>',N'expense_void',1,1)` works, `N'bogus'` fails (547); delete the test row.
+Pass: yes.
+
+### F4-02 Record an expense (own transaction)
+Steps: `EXEC dbo.usp_RecordExpense @org_id='<ORG>', @created_by='<USER>', @amount=30, @category=N'rent', @voucher_reference=N'V-1', @expense_id=@id OUTPUT, @status=@st OUTPUT, @message=@msg OUTPUT, @error_number=@err OUTPUT; SELECT @id,@st,@msg,@err,@@TRANCOUNT;`
+Expected: `committed`, `@err` NULL, `@@TRANCOUNT` 0; one `expenses` row (30.00, today); `cash_accounts.balance` decreased by 30; one `cash_ledger` row: `expense`, amount -30.00, `ref_type='expense'`, `ref_id=@id`, `balance_after` = new balance.
+Pass: yes.
+
+### F4-03 Negative balance is allowed
+Steps: for an org with balance 0 (or after F4-02 with no sales) record an expense bigger than the balance.
+Expected: `committed`; `balance` negative; ledger `balance_after` negative; `SUM(cash_ledger.amount)` = balance.
+Pass: yes.
+
+### F4-04 Validation and atomic rollback
+Steps: `@amount = 0`, `@amount = -5`, `@amount = NULL`; an unknown `@org_id`; then force an engine error: `UPDATE cash_accounts SET balance = -99999999999999.00 WHERE org_id='<ORG>'` and record an expense of 999999999999.99.
+Expected: first three `rolled_back` / 50003; unknown org `rolled_back` / 50005; the overflow case `rolled_back` with a non-5000x error number (8115) AND no new `expenses` / `cash_ledger` row (the insert before the failing balance update is undone). Restore the balance afterwards.
+Pass: nothing changed in any failing case.
+
+### F4-05 Nested transaction: the caller decides
+Steps: `BEGIN TRAN; EXEC dbo.usp_RecordExpense ...(valid)...; SELECT @@TRANCOUNT; ROLLBACK;` then the same with `COMMIT`; then `BEGIN TRAN; <unrelated insert>; EXEC ...(@amount=0)...; SELECT @@TRANCOUNT; COMMIT;`
+Expected: `committed` with `@@TRANCOUNT` 1 inside; ROLLBACK removes expense, balance change and ledger row; COMMIT keeps them; the invalid call is `rolled_back`, `@@TRANCOUNT` still 1 and the unrelated row survives.
+Pass: yes.
+
+### F4-06 Void an expense
+Steps: `EXEC dbo.usp_VoidExpense @org_id='<ORG>', @expense_id=@id, @voided_by='<USER>', @status=@st OUTPUT, @message=@msg OUTPUT, @error_number=@err OUTPUT;` then again; then with another org's id.
+Expected: first `voided`: balance back up by 30, an `expense_void` row (+30), the expense is gone. Second call and the foreign org: `not_found` / 50007, nothing changed.
+Pass: yes.
+
+### F4-07 Adjust an amount (sale and expense)
+Steps: `EXEC dbo.usp_AdjustEntryAmount @org_id='<ORG>', @ref_type=N'expense', @ref_id=<expense>, @new_amount=45, @adjusted_by='<USER>', @status=@st OUTPUT, @message=@msg OUTPUT, @error_number=@err OUTPUT;` (old amount 30); then `@ref_type=N'sale'` on a QUICK sale (old 50, new 80); then the same amount again.
+Expected: expense: `adjusted`, amount 45, ledger `adjustment` -15, balance -15; sale: `adjusted`, amount 80, ledger `adjustment` +30, balance +30; same amount: `unchanged`, no new ledger row. `balance` = `SUM(cash_ledger.amount)`.
+Pass: yes.
+
+### F4-08 Adjust refusals
+Steps: adjust the amount of a sale WITH items; of an unknown id; of another org's id; `@new_amount = 0`; `@ref_type = N'bogus'`.
+Expected: `not_allowed` / 50008; `not_found` / 50006 (sale) or 50007 (expense); `not_found`; `rolled_back` / 50003; `rolled_back` / 50003. No amount, balance or ledger change in any case.
+Pass: yes.
+
+### F4-09 Void after an edit stays consistent
+Steps: quick sale 50 -> adjust to 80 -> `usp_VoidSale`; and expense 30 -> adjust to 45 -> `usp_VoidExpense`.
+Expected: sale: `sale_void` row of -80 (sale + adjustment reversed), balance back to its value before the sale; expense: `expense_void` +45. `balance = SUM(amount)` throughout.
+Pass: yes.
+
+### F4-10 API: expenses, edits, ledger filters, summary
+Steps: `POST /expenses {"amount":30,"category":"rent"}`; `GET /cash/balance`; `PUT /expenses/<id> {"amount":45,"description":"x"}`; `PUT /sales/<quick sale> {"amount":80}`; `GET /cash/ledger?entry_type=adjustment`; `GET /cash/ledger?from=2026-01-01&to=2026-12-31`; `GET /cash/summary?year=2026&month=<this month>`; `GET /cash/summary?year=2026&month=13`; `DELETE /expenses/<id>`.
+Expected: 201 and balance -30; 200 with the new amount and description, ledger shows the adjustment; filters return only matching rows (newest first); summary: `opening_balance + total_in - total_out = closing_balance`, `by_type` has the five types; month 13 => 422; DELETE 204 and the balance goes back. A PUT on a sale WITH items and `amount` => 422 and no ledger row. Other org's token => 404 on every expense verb.
+Pass: yes. Replaying a POST with the same `Idempotency-Key` returns the same body and posts only once.
+
+### F4-11 Product with sales cannot be deleted
+Steps: `DELETE /products/<id of a product that was sold>`; then `PUT /products/<id> {"is_active": false}`; then `DELETE` of an unsold product.
+Expected: 409 `Product has sales and cannot be deleted; deactivate it instead` (not 500); product still present; PUT 200 with `is_active` false; unsold product 204. (If you run a non-English SQL Server you may still see 500: specs/17 #54.)
+Pass: yes.
+
+### F4-12 Automated DB tests
+Steps: `RUN_MSSQL=1 pytest tests/sqlserver/test_expenses_cash_sqlserver.py -v` from `api/`.
+Expected: 12 tests pass (negative balance + ledger row, overflow rollback, procedure validation, void symmetry, adjustment deltas, item-sale refusal, own vs nested, 10 concurrent expenses, concurrent adjustments, real filters/summary, product-delete 409, CHECK widening).
+Pass: all green; tests clean up their own rows. Report any T-SQL syntax error message so the spec can be corrected.
+

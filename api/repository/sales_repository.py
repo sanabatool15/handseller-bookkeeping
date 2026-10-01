@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from core.db import Db
-from repository.base import clamp_page, month_range
+from repository.base import BUSINESS_ERRORS, ProcedureError, clamp_page, month_range  # noqa: F401  (re-exported)
 
 # sales has an AFTER UPDATE trigger => OUTPUT must go INTO a table variable (SQL Server error 334),
 # so every write does: DECLARE @o TABLE; <DML> OUTPUT ... INTO @o; SELECT * FROM @o.
@@ -29,13 +29,14 @@ _LIST_MONTH = (
     "ORDER BY sale_date DESC, created_at DESC, id"
 )
 _GET_SCOPED = "SELECT TOP (1) * FROM sales WHERE id = ? AND org_id = ?"
-# Updates never set a column to NULL (the service strips None values), so COALESCE(?, col) keeps the
-# statement fully static: no SQL is built from the keys of `updates`. customer_id is the exception: a PRESENT
-# key (even None) is written, so a sale can be unlinked from its customer (flag 1 = set, 0 = leave).
+# METADATA update only. `amount` is deliberately NOT updatable here: a sale's amount is part of the cash
+# ledger, so it changes only through dbo.usp_AdjustEntryAmount (cash_repository.adjust_entry_amount), which posts
+# the delta in the same transaction. Updates never set a column to NULL (the service strips None values), so
+# COALESCE(?, col) keeps the statement fully static: no SQL is built from the keys of `updates`. customer_id is the
+# exception: a PRESENT key (even None) is written, so a sale can be unlinked from its customer (flag 1 = set, 0 = leave).
 _UPDATE = (
     _OUT_DECL
-    + "UPDATE sales SET amount = CASE WHEN EXISTS (SELECT 1 FROM sale_items WHERE sale_items.sale_id = sales.id AND sale_items.org_id = ?) "
-    + "THEN amount ELSE COALESCE(?, amount) END, category = COALESCE(?, category), "
+    + "UPDATE sales SET category = COALESCE(?, category), "
     + "customer_name = COALESCE(?, customer_name), description = COALESCE(?, description), "
     + "customer_id = CASE WHEN ? = 1 THEN CAST(? AS uniqueidentifier) ELSE customer_id END "
     + _OUT_COLS
@@ -49,7 +50,7 @@ _SUM_BY_CATEGORY = (
     "SELECT category, SUM(amount) AS total FROM sales "
     "WHERE org_id = ? AND sale_date >= ? AND sale_date < ? GROUP BY category"
 )
-_UPDATABLE = ("amount", "category", "customer_name", "description", "customer_id")
+_UPDATABLE = ("category", "customer_name", "description", "customer_id")
 
 # Items of ONE sale / of many sales (ids passed as a JSON array, so the statement stays static). product_name via a
 # join that is scoped by org_id on both tables.
@@ -85,18 +86,6 @@ _VOID_SALE = (
     "@status = @status OUTPUT, @message = @message OUTPUT, @error_number = @error_number OUTPUT; "
     "SELECT @status AS status, @message AS message, @error_number AS error_number;"
 )
-# error numbers raised by the procedures themselves (business outcomes, not engine errors)
-BUSINESS_ERRORS = frozenset({50001, 50002, 50003, 50004, 50005, 50006})
-
-
-class ProcedureError(RuntimeError):
-    """The stored procedure rolled back because of an ENGINE error (deadlock 1205, constraint 547, ...).
-
-    The text always contains the error number so core.db.is_deadlock() recognises a deadlock victim."""
-
-    def __init__(self, error_number: int | None, message: str | None):
-        self.error_number = error_number
-        super().__init__(f"stored procedure failed with error {error_number}: {message}")
 
 
 def _money(amount: float) -> Decimal:
@@ -136,14 +125,12 @@ def get_sale_scoped(db: Db, *, sale_id: str, org_id: str) -> Optional[dict[str, 
 
 
 def update_sale_scoped(db: Db, *, sale_id: str, org_id: str, updates: dict[str, Any]) -> Optional[dict[str, Any]]:
-    """Metadata update. The amount of a sale WITH line items is never changed by this statement (see _UPDATE)."""
+    """Metadata update (category, customer_name, description, customer_id). `amount` is rejected (ValueError): it
+    goes through cash_repository.adjust_entry_amount so the cash ledger stays consistent."""
     unknown = set(updates) - set(_UPDATABLE)
     if unknown:
         raise ValueError(f"cannot update columns: {sorted(unknown)}")
-    amount = updates.get("amount")
     params = (
-        org_id,
-        None if amount is None else _money(amount),
         updates.get("category"),
         updates.get("customer_name"),
         updates.get("description"),

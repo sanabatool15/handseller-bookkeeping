@@ -126,18 +126,12 @@ def build_orgs_fakes(store: FakeSqlStore) -> dict[str, Any]:
 
 def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: str, extra_col: str,
                   link_cols: tuple[str, ...] = ()) -> dict[str, Any]:
-    """Fakes for sales/expenses. They scope by id AND org_id exactly like the SQL does, so a
-    cross-tenant id simply "does not exist" (=> 404 at the router), and they sum per date range."""
+    """Read/metadata fakes for sales/expenses. They scope by id AND org_id exactly like the SQL does, so a
+    cross-tenant id simply "does not exist" (=> 404 at the router), and they sum per date range. There is deliberately
+    NO create/delete here (those go through the procedure fakes, which post to the cash ledger) and `amount` is not
+    updatable (usp_AdjustEntryAmount)."""
     def tbl() -> dict[str, dict[str, Any]]:
         return getattr(store, table)
-
-    def create(db, *, org_id, created_by, amount, category, description, **extra) -> dict:
-        row = {"id": str(uuid.uuid4()), "org_id": org_id, "created_by": created_by, "amount": float(amount),
-               "category": category, extra_col: extra.get(extra_col), "description": description,
-               date_col: repo_base.today_utc().isoformat(), "created_at": _now(), "updated_at": _now()}
-        row.update({c: extra.get(c) for c in link_cols})  # e.g. sales.customer_id (null when absent)
-        tbl()[row["id"]] = row
-        return dict(row)
 
     def _ordered(org_id: str) -> list[dict]:
         mine = [r for r in tbl().values() if r["org_id"] == org_id]
@@ -159,23 +153,16 @@ def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: s
         return dict(r) if r and r["org_id"] == org_id else None
 
     def update_scoped(db, *, org_id, updates, **ids) -> Optional[dict]:
-        allowed = {"amount", "category", extra_col, "description", *link_cols}
+        allowed = {"category", extra_col, "description", *link_cols}  # amount only via adjust_entry_amount (ledger)
         if set(updates) - allowed:
             raise ValueError(f"cannot update columns: {sorted(set(updates) - allowed)}")
         r = tbl().get(ids[f"{singular}_id"])
         if not r or r["org_id"] != org_id:
             return None
         # link columns (customer_id): a PRESENT key is written even when None (unlink); others skip None
-        r.update({k: (float(v) if k == "amount" else v) for k, v in updates.items() if v is not None or k in link_cols})
+        r.update({k: v for k, v in updates.items() if v is not None or k in link_cols})
         r["updated_at"] = _now()
         return dict(r)
-
-    def delete_scoped(db, *, org_id, **ids) -> bool:
-        r = tbl().get(ids[f"{singular}_id"])
-        if not r or r["org_id"] != org_id:
-            return False
-        del tbl()[r["id"]]
-        return True
 
     def sum_month(db, *, org_id, year, month) -> float:
         return float(sum(r["amount"] for r in _ordered(org_id) if _in_month(r, year, month)))
@@ -189,15 +176,27 @@ def _ledger_fakes(store: FakeSqlStore, *, table: str, singular: str, date_col: s
 
     plural = table
     return {
-        f"create_{singular}": create, f"list_{plural}": list_, f"list_{plural}_for_month": list_for_month,
+        f"list_{plural}": list_, f"list_{plural}_for_month": list_for_month,
         f"get_{singular}_scoped": get_scoped, f"update_{singular}_scoped": update_scoped,
-        f"delete_{singular}_scoped": delete_scoped, f"sum_{plural}_for_month": sum_month,
+        f"sum_{plural}_for_month": sum_month,
         f"sum_{plural}_by_category_for_month": by_category,
     }
 
 
 def _round2(x: float) -> float:
     return round(float(x) + 0.0, 2)
+
+
+def post_cash(store: FakeSqlStore, org_id, entry_type, amount, ref_type, ref_id, created_by, entry_date=None) -> None:
+    """What every procedure does at its end: balance += amount (account created lazily) and one ledger row with balance_after."""
+    acct = store.cash_accounts.setdefault(org_id, {"org_id": org_id, "balance": 0.0, "created_at": _now(), "updated_at": _now()})
+    acct["balance"] = _round2(acct["balance"] + amount)
+    acct["updated_at"] = _now()
+    row = {"id": str(uuid.uuid4()), "org_id": org_id, "entry_type": entry_type, "amount": _round2(amount),
+           "ref_type": ref_type, "ref_id": ref_id, "balance_after": acct["balance"],
+           "entry_date": entry_date or repo_base.today_utc().isoformat(), "created_by": created_by,
+           "created_at": _now(), "updated_at": _now()}
+    store.cash_ledger[row["id"]] = row
 
 
 def build_sales_fakes(store: FakeSqlStore) -> dict[str, Any]:
@@ -207,8 +206,6 @@ def build_sales_fakes(store: FakeSqlStore) -> dict[str, Any]:
     end, which is how a rollback looks from the outside (and FakeSqlDb.rollback() restores the store anyway)."""
     fakes = _ledger_fakes(store, table="sales", singular="sale", date_col="sale_date", extra_col="customer_name",
                           link_cols=("customer_id",))
-    fakes.pop("create_sale")
-    fakes.pop("delete_sale_scoped")
     base_get, base_list, base_update = fakes["get_sale_scoped"], fakes["list_sales"], fakes["update_sale_scoped"]
 
     def _items_of(sale_id: str, org_id: str) -> list[dict]:
@@ -227,20 +224,10 @@ def build_sales_fakes(store: FakeSqlStore) -> dict[str, Any]:
         return [_with_items(s) for s in base_list(db, org_id=org_id, limit=limit, offset=offset)]
 
     def update_sale_scoped(db, *, sale_id, org_id, updates):
-        has_items = bool(_items_of(sale_id, org_id))
-        if has_items:  # the real statement leaves amount untouched for item sales
-            updates = {k: v for k, v in updates.items() if k != "amount"}
         return _with_items(base_update(db, sale_id=sale_id, org_id=org_id, updates=updates))
 
     def _post_cash(org_id, entry_type, amount, ref_id, created_by, entry_date=None) -> None:
-        acct = store.cash_accounts.setdefault(org_id, {"org_id": org_id, "balance": 0.0, "created_at": _now(), "updated_at": _now()})
-        acct["balance"] = _round2(acct["balance"] + amount)
-        acct["updated_at"] = _now()
-        row = {"id": str(uuid.uuid4()), "org_id": org_id, "entry_type": entry_type, "amount": _round2(amount),
-               "ref_type": "sale", "ref_id": ref_id, "balance_after": acct["balance"],
-               "entry_date": entry_date or repo_base.today_utc().isoformat(), "created_by": created_by,
-               "created_at": _now(), "updated_at": _now()}
-        store.cash_ledger[row["id"]] = row
+        post_cash(store, org_id, entry_type, amount, "sale", ref_id, created_by, entry_date)
 
     def record_sale(db, *, org_id, created_by, customer_id, customer_name, category, description, amount, items,
                     skip_invalid_items) -> dict:
@@ -303,8 +290,8 @@ def build_sales_fakes(store: FakeSqlStore) -> dict[str, Any]:
         for it in _items_of(sale_id, org_id):
             store.products[it["product_id"]]["stock_qty"] += it["quantity"]
             del store.sale_items[it["id"]]
-        posted = sum(e["amount"] for e in store.cash_ledger.values()
-                     if e["org_id"] == org_id and e["ref_id"] == sale_id and e["entry_type"] == "sale")
+        posted = sum(e["amount"] for e in store.cash_ledger.values()   # the 'sale' entry + its 'adjustment' entries
+                     if e["org_id"] == org_id and e["ref_id"] == sale_id and e["entry_type"] in ("sale", "adjustment"))
         if posted:
             _post_cash(org_id, "sale_void", -posted, sale_id, voided_by)
         del store.sales[sale_id]
@@ -320,21 +307,84 @@ def build_cash_fakes(store: FakeSqlStore) -> dict[str, Any]:
         acct = store.cash_accounts.get(org_id)
         return {"balance": acct["balance"], "updated_at": acct["updated_at"]} if acct else {"balance": 0.0, "updated_at": None}
 
-    def list_ledger(db, *, org_id, limit=100, offset=0) -> list[dict]:
+    def list_ledger(db, *, org_id, limit=100, offset=0, entry_type=None, date_from=None, date_to=None) -> list[dict]:
         limit, offset = repo_base.clamp_page(limit, offset)
-        rows = [dict(e) for e in store.cash_ledger.values() if e["org_id"] == org_id]
+        rows = [dict(e) for e in store.cash_ledger.values() if e["org_id"] == org_id
+                and (entry_type is None or e["entry_type"] == entry_type)
+                and (date_from is None or e["entry_date"] >= date_from.isoformat())
+                and (date_to is None or e["entry_date"] <= date_to.isoformat())]
         rows.sort(key=lambda r: (r["created_at"], r["id"]), reverse=True)
         return rows[offset:offset + limit]
 
-    return {"get_balance": get_balance, "list_ledger": list_ledger}
+    def get_month_summary(db, *, org_id, year, month) -> dict:
+        start, end = repo_base.month_range(year, month)
+        mine = [e for e in store.cash_ledger.values() if e["org_id"] == org_id]
+        opening = sum(e["amount"] for e in mine if e["entry_date"] < start.isoformat())
+        inside = [e for e in mine if start.isoformat() <= e["entry_date"] < end.isoformat()]
+        by_type: dict[str, float] = {}
+        for e in inside:
+            by_type[e["entry_type"]] = _round2(by_type.get(e["entry_type"], 0.0) + e["amount"])
+        return {"opening_balance": _round2(opening),
+                "total_in": _round2(sum(e["amount"] for e in inside if e["amount"] > 0)),
+                "total_out": _round2(sum(-e["amount"] for e in inside if e["amount"] < 0)),
+                "closing_balance": _round2(opening + sum(e["amount"] for e in inside)), "by_type": by_type}
+
+    def adjust_entry_amount(db, *, org_id, ref_type, ref_id, new_amount, adjusted_by) -> dict:
+        """Mirror of usp_AdjustEntryAmount: scoped by id AND org_id, refuses sales with items, posts +delta (sale) / -delta (expense)."""
+        def out(status, number, message):
+            return {"status": status, "message": message, "error_number": number}
+
+        if ref_type not in ("sale", "expense"):
+            return out("rolled_back", 50003, "ref_type must be sale or expense")
+        if new_amount is None or new_amount <= 0:
+            return out("rolled_back", 50003, "amount must be positive")
+        row = (store.sales if ref_type == "sale" else store.expenses).get(ref_id)
+        if not row or row["org_id"] != org_id:
+            return out("not_found", 50006 if ref_type == "sale" else 50007, "Sale not found" if ref_type == "sale" else "Expense not found")
+        if ref_type == "sale" and any(i["sale_id"] == ref_id and i["org_id"] == org_id for i in store.sale_items.values()):
+            return out("not_allowed", 50008, "The amount of a sale with line items cannot be changed (it is the sum of its items)")
+        delta = _round2(float(new_amount) - row["amount"])
+        if delta == 0:
+            return out("unchanged", None, "Amount unchanged")
+        row["amount"] = _round2(new_amount)
+        row["updated_at"] = _now()
+        post_cash(store, org_id, "adjustment", delta if ref_type == "sale" else -delta, ref_type, ref_id, adjusted_by)
+        return out("adjusted", None, "Amount adjusted")
+
+    return {"get_balance": get_balance, "list_ledger": list_ledger, "get_month_summary": get_month_summary,
+            "adjust_entry_amount": adjust_entry_amount}
 
 
 def build_expenses_fakes(store: FakeSqlStore) -> dict[str, Any]:
+    """Fakes for expenses + usp_RecordExpense / usp_VoidExpense: the expense row, the cash balance and the ledger entry
+    change together (negative balance allowed), everything scoped by org_id."""
     fakes = _ledger_fakes(store, table="expenses", singular="expense", date_col="expense_date", extra_col="voucher_reference")
-    inner = fakes["create_expense"]
-    fakes["create_expense"] = lambda db, *, org_id, created_by, amount, category, voucher_reference, description: inner(
-        db, org_id=org_id, created_by=created_by, amount=amount, category=category, description=description,
-        voucher_reference=voucher_reference)
+    get_scoped = fakes["get_expense_scoped"]
+
+    def record_expense(db, *, org_id, created_by, amount, category, voucher_reference, description, expense_date=None) -> dict:
+        if amount is None or amount <= 0:
+            return {"status": "rolled_back", "message": "amount must be positive", "error_number": 50003, "expense": None}
+        day = (expense_date or repo_base.today_utc()).isoformat()
+        row = {"id": str(uuid.uuid4()), "org_id": org_id, "created_by": created_by, "amount": _round2(amount),
+               "category": category or "general", "voucher_reference": voucher_reference, "description": description,
+               "expense_date": day, "created_at": _now(), "updated_at": _now()}
+        store.expenses[row["id"]] = row
+        post_cash(store, org_id, "expense", -_round2(amount), "expense", row["id"], created_by, day)
+        return {"status": "committed", "message": "Expense recorded", "error_number": None,
+                "expense": get_scoped(db, expense_id=row["id"], org_id=org_id)}
+
+    def void_expense(db, *, org_id, expense_id, voided_by) -> dict:
+        row = store.expenses.get(expense_id)
+        if not row or row["org_id"] != org_id:
+            return {"status": "not_found", "message": "Expense not found"}
+        posted = sum(e["amount"] for e in store.cash_ledger.values()
+                     if e["org_id"] == org_id and e["ref_id"] == expense_id and e["entry_type"] in ("expense", "adjustment"))
+        if posted:
+            post_cash(store, org_id, "expense_void", -posted, "expense", expense_id, voided_by)
+        del store.expenses[expense_id]
+        return {"status": "voided", "message": "Expense voided"}
+
+    fakes.update(record_expense=record_expense, void_expense=void_expense)
     return fakes
 
 
@@ -391,6 +441,8 @@ def build_products_fakes(store: FakeSqlStore) -> dict[str, Any]:
         r = store.products.get(product_id)
         if not r or r["org_id"] != org_id:
             return False
+        if any(i["product_id"] == product_id for i in store.sale_items.values()):  # FK_sale_items_product (547)
+            raise repo_base.RecordInUseError("DELETE conflicted with the REFERENCE constraint FK_sale_items_product (547)")
         del store.products[product_id]
         return True
 

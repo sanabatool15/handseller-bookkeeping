@@ -21,7 +21,7 @@ ai_agents/     (renamed from agents/ — see "Package-name collisions, fixed" be
   rules/       Deterministic rule-based fallback (works fully offline)
   tools/       Utility functions (web search, deep-link generation)
 core/          FastAPI app wiring, settings, SQL Server (`db.py`, `clients.py`)/Redis clients, JWT
-../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql, 03_products.sql, 04_customers.sql, 05_sale_items_cash_recordsale.sql (+ TEST_CASES.md)
+../sql_server/ T-SQL scripts 01_foundation.sql, 02_sales_expenses_agents.sql, 03_products.sql, 04_customers.sql, 05_sale_items_cash_recordsale.sql, 06_expenses_cash.sql (+ TEST_CASES.md)
 sql/           LEGACY Postgres/Supabase schema, kept for reference only (no longer used)
 tests/
   unit/        Mocked DB (in-memory fake) + fakeredis
@@ -71,10 +71,28 @@ Design, transaction boundaries and concurrency: `specs/14-inventory-and-cash-dom
 | Endpoint | Behaviour |
 |---|---|
 | `POST /sales` | Body: `amount` (required only without items), optional `items: [{product_id, quantity > 0, unit_price? >= 0}]` (max 200; price defaults to the product's), `skip_invalid_items` (default false), `category`, `description`, `customer_name`, `customer_id`. With items the total is the sum of the lines and `amount` is ignored. 201 `committed`; 201 `partial` (body has `skipped_items: [{product_id, quantity, error_number, reason}]`); 409 `Not enough stock for <product>` and nothing changes; 404 `Product not found` (unknown or other org) / `Customer not found`; 422 validation |
-| `GET /sales`, `GET/PUT /sales/{id}` | Sale JSON now has `customer_id` and `items` (list, `[]` for quick sales; each item has `product_name`, `unit_price`, `line_total`). `PUT` changes metadata only; an `amount` change on a sale WITH items is 422 |
+| `GET /sales`, `GET/PUT /sales/{id}` | Sale JSON now has `customer_id` and `items` (list, `[]` for quick sales; each item has `product_name`, `unit_price`, `line_total`). `PUT` changes metadata; an `amount` change on a sale WITH items is 422, on a quick sale it posts an `adjustment` cash entry (F4) |
 | `DELETE /sales/{id}` | 204: void in one transaction; 404 unknown/other org |
-| `GET /cash/balance` | `{balance, updated_at}` (0.0 / null before the first sale) |
-| `GET /cash/ledger?limit=&offset=` | newest first: `entry_type` (`sale`, `sale_void`, ...), signed `amount`, `balance_after`, `ref_type/ref_id`, `entry_date` |
+| `GET /cash/balance` | `{balance, updated_at}` (0.0 / null before the first posting) |
+| `GET /cash/ledger?limit=&offset=` | newest first: `entry_type` (`sale`, `sale_void`, ...), signed `amount`, `balance_after`, `ref_type/ref_id`, `entry_date` (F4 adds filters, see below) |
+
+## Expenses on the cash ledger, Cash endpoints (slice F4, `../sql_server/06_expenses_cash.sql`)
+
+Run `05` (amended in F4) and then `06` in SSMS; both are re-runnable. Expenses now move cash exactly like sales: `usp_RecordExpense`,
+`usp_VoidExpense` and `usp_AdjustEntryAmount` change the record, `cash_accounts.balance` and `cash_ledger` in ONE transaction. The cash balance MAY go negative
+(spending before cashing up is allowed). Design: `specs/14-inventory-and-cash-domain.md` (F4) and `specs/15-transactions-and-concurrency.md` (section 7). All require auth; `POST`/`PUT` require `Idempotency-Key`; cross-tenant ids return 404.
+
+| Endpoint | Behaviour |
+|---|---|
+| `POST /expenses` | Body `amount` (> 0, <= 999,999,999,999.99), `category` (<= 100), `voucher_reference` (<= 200), `description`. 201; the balance goes down by `amount` and an `expense` ledger entry (negative amount) is written; 422 invalid |
+| `PUT /expenses/{id}` | Body any of `amount`, `category`, `voucher_reference`, `description`. A changed `amount` posts an `adjustment` entry (`-delta`: a higher expense lowers cash); other fields update in the same transaction; 404 unknown/other org |
+| `DELETE /expenses/{id}` | 204: void in one transaction (`expense_void` entry gives the money back); 404 unknown/other org |
+| `PUT /sales/{id}` with `amount` | quick sale: posts an `adjustment` entry (`+delta`); sale with items: 422 |
+| `DELETE /products/{id}` | now **409** `Product has sales and cannot be deleted; deactivate it instead` when sale items reference it (use `PUT {"is_active": false}`) |
+| `GET /cash/ledger?entry_type=&from=&to=&limit=&offset=` | optional filters: `entry_type` in `sale, sale_void, expense, expense_void, adjustment`; `from`/`to` = inclusive `entry_date` range (`YYYY-MM-DD`). 422 for an unknown type, a bad date or `from` > `to` |
+| `GET /cash/summary?year=&month=` | default current UTC month: `{year, month, opening_balance, total_in, total_out, closing_balance, by_type}` (`total_out` positive magnitude, `by_type` net per type, all five types present). Computed in SQL (`SUM ... GROUP BY`) |
+
+UI: new **Cash** page (`/cash`: balance, monthly summary cards, type/date filters, ledger with running balance); expenses and sales pages show API errors.
 
 ## Customers endpoints (slice F2, `../sql_server/04_customers.sql`)
 
@@ -305,7 +323,7 @@ Visit `http://localhost:8288` for the Inngest Dev Server UI, and
 ### SQL Server environment variables (see `specs/13-sql-server-migration.md`)
 
 Everything (auth, sales, expenses, agent jobs/logs, Inngest job steps, MCP server, agent tools) runs on
-SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql`, `04_customers.sql`, `05_sale_items_cash_recordsale.sql` in SSMS first, then set either
+SQL Server; Supabase is gone. Run `../sql_server/01_foundation.sql` then `02_sales_expenses_agents.sql` then `03_products.sql`, `04_customers.sql`, `05_sale_items_cash_recordsale.sql`, `06_expenses_cash.sql` in SSMS first, then set either
 `MSSQL_CONNECTION_STRING` (full ODBC string) or `MSSQL_SERVER`, `MSSQL_DATABASE` (default
 `HandsellerDB`), `MSSQL_USER`/`MSSQL_PASSWORD` (empty user = Windows auth), `MSSQL_DRIVER`
 (default `ODBC Driver 18 for SQL Server`), `MSSQL_TRUST_SERVER_CERTIFICATE`. Requires the

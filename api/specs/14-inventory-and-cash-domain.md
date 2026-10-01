@@ -107,8 +107,8 @@ This spec grows slice by slice. Each section says what was built, why, where it 
   The hot-row update is the LAST statement of the transaction, so the lock is held briefly. First-sale creation of the account uses `UPDLOCK, HOLDLOCK` on the key range so two concurrent first sales cannot both insert.
 * **Lock order**: items are processed sorted by `product_id`, so two sales with the same products lock them in the same order (fewer deadlocks). Remaining deadlocks are retried (`run_with_deadlock_retry`, up to 3 times, `on_event` hook for later logging).
 * **Void** reverses what the ledger says was posted for that sale (not blindly `sales.amount`): sales that predate the cash ledger (no `sale` row) change no balance; a quick sale whose amount was edited is reversed by the posted amount, so balance == ledger sum always holds.
-* **PUT /sales/{id}** updates metadata. For a sale WITH items an `amount` change is 422 (the amount is the sum of the lines; enforced in the same UPDATE statement as well: `CASE WHEN EXISTS (items) THEN amount ELSE ...`). Quick sales may still change `amount`, but that edit does NOT post an adjustment to the cash ledger (specs/17 #40).
-* **Product delete**: the FK from `sale_items` blocks deleting a product that has been sold (error 547 -> HTTP 500 today; specs/17 #41).
+* **PUT /sales/{id}** updates metadata. For a sale WITH items an `amount` change is 422 (the amount is the sum of the lines; enforced in the same UPDATE statement as well: `CASE WHEN EXISTS (items) THEN amount ELSE ...`). Quick sales may still change `amount`; since F4 that edit posts an `adjustment` ledger entry (see the F4 section; specs/17 #40 resolved).
+* **Product delete**: the FK from `sale_items` blocks deleting a product that has been sold (error 547). *(F4: now HTTP 409, see below; specs/17 #41 resolved.)*
 * Rows are scoped by `org_id` in every statement of the procedures (static test over the .sql file) and in the repository.
 
 ### Where tested
@@ -118,4 +118,42 @@ This spec grows slice by slice. Each section says what was built, why, where it 
   Manual: `sql_server/TEST_CASES.md` F3-01..F3-12.
 
 ### Not covered / limitations
-* T-SQL is unrun in the authoring sandbox. `expense` ledger entries are not posted yet (the entry type exists; expenses do not touch cash). No stock-movement history. No partial void / returns. A hot `cash_accounts` row serialises the commit of all sales of one org (fine at this scale).
+* T-SQL is unrun in the authoring sandbox. *(F4: expenses now post `expense` ledger entries, see below.)* No stock-movement history. No partial void / returns. A hot `cash_accounts` row serialises the commit of all sales of one org (fine at this scale).
+
+## F4: Expenses on the cash ledger, Cash page, F3 follow-ups
+
+### What
+* `sql_server/06_expenses_cash.sql` (re-runnable; run 05 first, it was amended): widens `CK_cash_ledger_entry_type` with `expense_void` (guarded drop + re-create) and adds
+  `dbo.usp_RecordExpense`, `dbo.usp_VoidExpense`, `dbo.usp_AdjustEntryAmount`. All three use the F3 transaction pattern (`@own_tran` own vs nested + savepoint, `XACT_ABORT ON`, `XACT_STATE()` in CATCH,
+  business failures as OUTPUT values, every statement scoped by `org_id`; see specs/15).
+* `05_...sql`: `usp_VoidSale` now reverses the `sale` entry PLUS its `adjustment` entries (specs/17 #51).
+* Repository: `expenses_repository.record_expense` / `void_expense` (EXEC), `cash_repository.adjust_entry_amount` (EXEC), `cash_repository.list_ledger` (filters) and `get_month_summary`. The plain `create_expense` /
+  `delete_expense_scoped` are GONE and the metadata `UPDATE`s of sales and expenses no longer write `amount` (they raise `ValueError` for it): there is no repository path that changes money without the ledger
+  (a static test enforces: no `INSERT INTO` / `DELETE FROM` on sales, expenses, cash tables, sale_items in `repository/*.py`). `ProcedureError`, `BUSINESS_ERRORS` and the shared `call_procedure` helper moved to `repository/base.py`.
+* Services: `expenses_service` (create/update/delete through the procedures, each unit of work in `run_with_deadlock_retry`), `sales_service.update_sale`, `cash_service` (validation, defaults), `products_service.delete_product` (409).
+* UI: `app/(app)/cash/page.tsx` (+ sidebar "Cash"), `lib/use-cash.ts` (`useCashLedger`, `useCashSummary`), expenses/sales pages show API errors, the dashboard cash KPI links to `/cash`.
+
+### Behaviour and why
+* **Expense = three changes in one transaction**: `expenses` row, `cash_accounts.balance = balance - amount` (ONE statement, no read-then-write), `cash_ledger` row (`expense`, NEGATIVE amount, `balance_after`).
+  The balance MAY become negative (a handseller can spend before cashing up; no guard, no CHECK; specs/17 #50). Invariant: `balance == SUM(ledger.amount)` per org (tested, also under concurrency).
+* **Void expense** (`DELETE /expenses/{id}`): locks the expense row (`UPDLOCK, HOLDLOCK`), reverses what the ledger says was posted (`expense` + `adjustment` entries) with an `expense_void` entry, deletes the expense.
+  Unknown or foreign id => `not_found` => 404. Same symmetry as sales.
+* **Amount edit** (`PUT /sales|expenses/{id}` with a changed `amount`): `usp_AdjustEntryAmount` reads the CURRENT amount under an update lock (concurrent edits queue and compute their delta from the committed value), updates the amount and posts
+  `delta = new - old` as an `adjustment` entry: `+delta` for a sale, `-delta` for an expense (money out grew => cash fell), updating the balance. Same amount => no entry (`unchanged`). A sale WITH line items is refused (`not_allowed` => 422):
+  its amount is the sum of its items. The other fields of the same `PUT` are updated in the same request/transaction; a failure of either rolls both back.
+* **`DELETE /products/{id}`**: the database's FK (`FK_sale_items_product`) already refuses; `core.db` maps a REFERENCE/FOREIGN KEY 547 to `ForeignKeyViolationError` (like 2627/2601 -> `UniqueViolationError`), `repository.base` exposes it
+  as `RecordInUseError` (like `DuplicateRecordError`), the service raises `ProductInUseError` and the router answers **409** "Product has sales and cannot be deleted; deactivate it instead". `PUT {"is_active": false}` is the supported alternative.
+* **`GET /cash/ledger?entry_type=&from=&to=&limit=&offset=`**: optional, parameterised, org-scoped filters (`from`/`to` inclusive, on `entry_date`); unknown `entry_type`, a `from` after `to` or a malformed date => 422.
+* **`GET /cash/summary?year=&month=`** (default: current UTC month): `{year, month, opening_balance, total_in, total_out, closing_balance, by_type}`. Two scoped statements: `SUM(amount)` of everything dated before the month (opening), and
+  `SUM / SUM(CASE ...) ... GROUP BY entry_type` inside the month. `total_out` is a positive magnitude, `by_type` the net per type (all five types always present), `closing = opening + total_in - total_out`. A month without rows gives zeros and
+  closing == opening. Dates and caveats: specs/17 #55.
+
+### Where tested
+* Unit: `tests/unit/test_expenses_cash_service.py` (fakes mirroring the procedures: balance/ledger/delta math, negative balance, void symmetry, void after edit, item-sale refusal, cross-tenant on every verb, validation, deadlock retry, filters, summary incl. empty months),
+  `test_repository_sql_shapes.py` (EXEC shapes, bound filter parameters, FK mapping vs CHECK 547), `test_repository_sql_rules.py` (org scoping of every statement in `06_*.sql`, no ledger-bypassing writes, void reverses adjustments).
+* Integration: `tests/integration/test_expenses_cash_api.py` (+ `test_expenses_multitenancy.py`, `test_sales_items_api.py`): HTTP behaviour incl. 404/409/422, idempotent replay posts once.
+* Real DB (gated `RUN_MSSQL=1`): `tests/sqlserver/test_expenses_cash_sqlserver.py` (atomic rollback after an overflow in the cash update, void symmetry, adjustment deltas, own vs nested transaction, concurrent expenses and concurrent adjustments keep balance == ledger sum,
+  real filters/summary, product-delete 409 mapping, CHECK widening). Manual: `sql_server/TEST_CASES.md` F4-01..F4-12.
+
+### Not covered / limitations
+* T-SQL unrun in the authoring sandbox. No opening balance / back-fill of pre-ledger history (#53). No stock/cash reconciliation report. No "edit expense date" (the API always uses today for new expenses; the procedure accepts `@expense_date`).

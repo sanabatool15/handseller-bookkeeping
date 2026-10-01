@@ -48,10 +48,29 @@ export interface CashBalance {
   updated_at: string | null;
 }
 
+export type CashEntryType = "sale" | "sale_void" | "expense" | "expense_void" | "adjustment";
+
+export interface CashLedgerFilters {
+  entryType: CashEntryType | "";
+  from: string; // YYYY-MM-DD or ""
+  to: string; // YYYY-MM-DD or ""
+}
+
+/** GET /cash/summary: one calendar month (by entry_date). by_type = net signed amount per entry type. */
+export interface CashSummary {
+  year: number;
+  month: number;
+  opening_balance: number;
+  total_in: number;
+  total_out: number; // magnitude of the money that went out
+  closing_balance: number; // opening + total_in - total_out
+  by_type: Record<CashEntryType, number>;
+}
+
 export interface CashLedgerEntry {
   id: string;
   org_id: string;
-  entry_type: "sale" | "sale_void" | "expense" | "adjustment";
+  entry_type: CashEntryType;
   amount: number; // signed
   ref_type: string | null;
   ref_id: string | null;

@@ -32,6 +32,8 @@ def create_expense(payload: ExpenseCreate, user: CurrentUser = Depends(get_curre
             db, org_id=user.org_id, user_id=user.user_id, amount=payload.amount,
             category=payload.category, voucher_reference=payload.voucher_reference, description=payload.description,
         )
+    except expenses_service.NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except expenses_service.ValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -52,7 +54,9 @@ def get_expense(expense_id: str, user: CurrentUser = Depends(get_current_user), 
 @router.put("/{expense_id}")
 def update_expense(expense_id: str, payload: ExpenseUpdate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
-        return expenses_service.update_expense(db, org_id=user.org_id, expense_id=expense_id, updates=payload.model_dump())
+        return expenses_service.update_expense(
+            db, org_id=user.org_id, expense_id=expense_id, updates=payload.model_dump(), user_id=user.user_id,
+        )
     except expenses_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except expenses_service.ValidationError as exc:
@@ -62,6 +66,6 @@ def update_expense(expense_id: str, payload: ExpenseUpdate, user: CurrentUser = 
 @router.delete("/{expense_id}", status_code=204)
 def delete_expense(expense_id: str, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
-        expenses_service.delete_expense(db, org_id=user.org_id, expense_id=expense_id)
+        expenses_service.delete_expense(db, org_id=user.org_id, expense_id=expense_id, user_id=user.user_id)
     except expenses_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

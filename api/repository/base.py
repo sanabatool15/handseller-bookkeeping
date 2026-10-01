@@ -12,14 +12,52 @@ import datetime as dt
 import json
 from typing import Any, Optional
 
-from core.db import Db, UniqueViolationError, transaction  # noqa: F401  (re-exported for services)
+from core.db import Db, ForeignKeyViolationError, UniqueViolationError, transaction  # noqa: F401  (re-exported for services)
 
-# Services catch this instead of importing driver/SQL details.
+# Services catch these instead of importing driver/SQL details. Same pattern for both: core.db maps the engine
+# error (2627/2601 resp. 547 REFERENCE/FOREIGN KEY) to a typed exception, the repository lets it propagate.
 DuplicateRecordError = UniqueViolationError
+RecordInUseError = ForeignKeyViolationError  # deleting a row that other rows still reference (e.g. a product with sales)
 
 
 class RepositoryError(Exception):
     """Raised when a repository call is misused or returns an unexpected shape."""
+
+
+# Error numbers raised by the stored procedures themselves (business outcomes, not engine errors):
+# 50001 insufficient stock, 50002 product, 50003 validation, 50004 customer, 50005 org, 50006 sale,
+# 50007 expense not found, 50008 not allowed.
+BUSINESS_ERRORS = frozenset({50001, 50002, 50003, 50004, 50005, 50006, 50007, 50008})
+
+
+class ProcedureError(RuntimeError):
+    """The stored procedure rolled back because of an ENGINE error (deadlock 1205, constraint 547, ...).
+
+    The text always contains the error number so core.db.is_deadlock() recognises a deadlock victim."""
+
+    def __init__(self, error_number: int | None, message: str | None):
+        self.error_number = error_number
+        super().__init__(f"stored procedure failed with error {error_number}: {message}")
+
+
+def call_procedure(db: Db, sql: str, params: tuple, *, name: str) -> dict[str, Any]:
+    """Run ONE `EXEC dbo.usp_X ...; SELECT <outputs>` batch and return its OUTPUT row.
+
+    A driver error or an ENGINE error reported by the procedure (rolled_back with a non-business error number)
+    rolls the connection back and raises (ProcedureError for the latter) so the caller's deadlock retry can re-run
+    the whole unit of work. Business outcomes (statuses, 5000x numbers) are returned for the caller to interpret."""
+    try:
+        row = db.query_one(sql, params)
+    except Exception:
+        db.rollback()  # e.g. a deadlock raised by the driver itself: leave a clean connection for the retry
+        raise
+    if row is None:
+        db.rollback()
+        raise ProcedureError(None, f"{name} returned no result")
+    if row["status"] == "rolled_back" and row["error_number"] not in BUSINESS_ERRORS:
+        db.rollback()
+        raise ProcedureError(row["error_number"], row["message"])
+    return row
 
 
 # Table names are NEVER interpolated into SQL: each allowed table has its own literal statement,

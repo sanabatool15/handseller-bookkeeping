@@ -68,7 +68,9 @@ def get_sale(sale_id: str, user: CurrentUser = Depends(get_current_user), db: Db
 @router.put("/{sale_id}")
 def update_sale(sale_id: str, payload: SaleUpdate, user: CurrentUser = Depends(get_current_user), db: Db = Depends(get_db)):
     try:
-        return sales_service.update_sale(db, org_id=user.org_id, sale_id=sale_id, updates=payload.model_dump(exclude_unset=True))
+        return sales_service.update_sale(
+            db, org_id=user.org_id, sale_id=sale_id, updates=payload.model_dump(exclude_unset=True), user_id=user.user_id,
+        )
     except sales_service.NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except sales_service.ValidationError as exc:

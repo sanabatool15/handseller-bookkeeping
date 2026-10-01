@@ -79,7 +79,9 @@ export default function DashboardPage() {
         <KpiCard label="Net profit / loss" value={net} icon={DollarSign} tone="olive" />
         <KpiCard label="Total sales" value={totalSales} icon={TrendingUp} tone="accent" />
         <KpiCard label="Total expenses" value={totalExpenses} icon={TrendingDown} />
-        <KpiCard label="Cash balance" value={cash.balance} icon={Wallet} />
+        <Link href="/cash" aria-label="Open the cash ledger" className="block">
+          <KpiCard label="Cash balance" value={cash.balance} icon={Wallet} />
+        </Link>
       </div>
 
       <GeneralInfoCard />
@@ -118,7 +120,9 @@ export default function DashboardPage() {
               await cash.refresh();
               return created;
             }
-            return expenses.create(input);
+            const created = await expenses.create(input);
+            await cash.refresh(); // an expense now moves cash too
+            return created;
           }}
         />
       )}

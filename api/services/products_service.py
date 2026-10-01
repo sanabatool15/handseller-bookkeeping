@@ -28,6 +28,10 @@ class InsufficientStockError(Exception):
     pass
 
 
+class ProductInUseError(Exception):
+    """The product is referenced by sale items (HTTP 409): it cannot be deleted, only deactivated."""
+
+
 def _clean_text(value: str | None, field: str, max_len: int) -> str:
     text = (value or "").strip()
     if not text:
@@ -95,7 +99,11 @@ def update_product(db: Db, *, org_id: str, product_id: str, updates: dict[str, A
 
 
 def delete_product(db: Db, *, org_id: str, product_id: str) -> None:
-    if not products_repository.delete_product_scoped(db, product_id=product_id, org_id=org_id):
+    try:
+        deleted = products_repository.delete_product_scoped(db, product_id=product_id, org_id=org_id)
+    except repo_base.RecordInUseError as exc:  # FK from sale_items (SQL Server 547): same pattern as DuplicateRecordError
+        raise ProductInUseError("Product has sales and cannot be deleted; deactivate it instead") from exc
+    if not deleted:
         raise NotFoundError("Product not found")
 
 

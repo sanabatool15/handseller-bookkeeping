@@ -122,11 +122,12 @@ def test_scoped_statements_send_id_then_org_id():
     assert db.calls[0][1] == ("s1", "o1") and db.calls[1][1] == ("s1", "o1")  # sale, then its items
     assert "si.sale_id = ? AND si.org_id = ?" in db.calls[1][0]
     db = RecDb([{"id": "s1"}])
-    sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"amount": 5.0})
+    sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"category": "c"})
     sql, p = db.calls[0]
-    assert p[-2:] == ("s1", "o1") and p[0] == "o1" and p[1] == decimal.Decimal("5.0") and p[2:5] == (None, None, None)
-    assert "WHERE id = ? AND org_id = ?" in sql
-    assert "EXISTS (SELECT 1 FROM sale_items" in sql  # amount of an item sale is left alone, in the same statement
+    assert p == ("c", None, None, 0, None, "s1", "o1") and "WHERE id = ? AND org_id = ?" in sql
+    assert "amount" not in sql[sql.index("UPDATE "):].split("OUTPUT")[0]  # amount is never written here (ledger!)
+    with pytest.raises(ValueError):
+        sales_repo.update_sale_scoped(RecDb(), sale_id="s1", org_id="o1", updates={"amount": 5.0})
 
 
 def test_list_sales_attaches_items_with_one_scoped_json_query():
@@ -155,7 +156,9 @@ def test_update_rejects_unknown_columns_without_touching_db():
 def test_expense_update_maps_voucher_reference():
     db = RecDb([{"id": "e"}])
     exp_repo.update_expense_scoped(db, expense_id="e", org_id="o", updates={"voucher_reference": "V-9"})
-    assert db.calls[0][1][2] == "V-9"
+    assert db.calls[0][1] == (None, "V-9", None, "e", "o")
+    with pytest.raises(ValueError):  # amount only via usp_AdjustEntryAmount
+        exp_repo.update_expense_scoped(RecDb(), expense_id="e", org_id="o", updates={"amount": 1.0})
 
 
 def test_month_sum_is_computed_in_sql_with_half_open_date_range():
@@ -250,12 +253,12 @@ def test_product_listing_low_stock_variant_and_paging():
 
 def test_sale_update_carries_customer_id_flag():
     db = RecDb([{"id": "s1"}])
-    sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"amount": 2.0})
-    assert db.calls[0][1][5:7] == (0, None) and db.calls[0][1][-2:] == ("s1", "o1")  # flag 0 = leave customer_id alone
+    sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"category": "x"})
+    assert db.calls[0][1][3:5] == (0, None) and db.calls[0][1][-2:] == ("s1", "o1")  # flag 0 = leave customer_id alone
     sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"customer_id": None})
-    assert db.calls[2][1][5:7] == (1, None)  # present null = unlink
+    assert db.calls[2][1][3:5] == (1, None)  # present null = unlink
     sales_repo.update_sale_scoped(db, sale_id="s1", org_id="o1", updates={"customer_id": "c9"})
-    assert db.calls[4][1][5:7] == (1, "c9")
+    assert db.calls[4][1][3:5] == (1, "c9")
 
 
 def test_cash_repository_statements_are_org_scoped():
@@ -266,7 +269,7 @@ def test_cash_repository_statements_are_org_scoped():
     assert db.calls[0][1] == ("o1",) and "WHERE org_id = ?" in db.calls[0][0]
     assert cash_repo.get_balance(RecDb(), org_id="o1") == {"balance": 0.0, "updated_at": None}
     cash_repo.list_ledger(db, org_id="o1", limit=10, offset=20)
-    assert db.calls[1][1] == ("o1", 20, 10) and "FROM cash_ledger WHERE org_id = ?" in db.calls[1][0]
+    assert db.calls[1][1] == ("o1", None, None, None, None, None, None, 20, 10) and "FROM cash_ledger WHERE org_id = ?" in db.calls[1][0]
 
 
 def test_create_customer_params_and_output_into():
@@ -313,3 +316,110 @@ def test_customer_summary_row_is_split_and_scoped_twice():
     assert out == {"customer": {"id": "c1", "org_id": "o1", "name": "Ana"}, "total_sales": 15.5, "sale_count": 2, "last_sale_date": "2026-01-02"}
     assert db.calls[0][1] == ("o1", "c1", "o1")
     assert cust_repo.get_customer_summary_scoped(RecDb([]), customer_id="c1", org_id="o2") is None
+
+
+def test_ledger_filters_are_bound_parameters_not_sql_text():
+    from repository import cash_repository as cash_repo
+
+    db = RecDb()
+    evil = "sale'; DROP TABLE cash_ledger;--"
+    cash_repo.list_ledger(db, org_id="o1", limit=5, offset=0, entry_type=evil,
+                          date_from=dt.date(2026, 1, 1), date_to=dt.date(2026, 1, 31))
+    sql, p = db.calls[0]
+    assert evil not in sql and "DROP" not in sql
+    assert p == ("o1", evil, evil, dt.date(2026, 1, 1), dt.date(2026, 1, 1), dt.date(2026, 1, 31), dt.date(2026, 1, 31), 0, 5)
+    assert sql.count("?") == len(p)
+
+
+def test_month_summary_runs_two_scoped_aggregates_and_derives_totals():
+    from repository import cash_repository as cash_repo
+
+    class SumDb(RecDb):
+        def query_one(self, sql, params=()):
+            self.calls.append((sql, tuple(params)))
+            return {"opening": 100.0}
+
+        def query(self, sql, params=()):
+            self.calls.append((sql, tuple(params)))
+            return [{"entry_type": "sale", "net": 50.0, "total_in": 50.0, "total_out": 0.0},
+                    {"entry_type": "expense", "net": -30.0, "total_in": 0.0, "total_out": 30.0}]
+
+    db = SumDb()
+    out = cash_repo.get_month_summary(db, org_id="o1", year=2026, month=12)
+    assert out == {"opening_balance": 100.0, "total_in": 50.0, "total_out": 30.0, "closing_balance": 120.0,
+                   "by_type": {"sale": 50.0, "expense": -30.0}}
+    assert "SUM(amount)" in db.calls[0][0] and db.calls[0][1] == ("o1", dt.date(2026, 12, 1))  # opening: before the month
+    assert "GROUP BY entry_type" in db.calls[1][0] and db.calls[1][1] == ("o1", dt.date(2026, 12, 1), dt.date(2027, 1, 1))
+
+
+def test_adjust_entry_amount_execs_procedure_and_maps_statuses():
+    from repository import cash_repository as cash_repo
+
+    db = ProcDb({"status": "adjusted", "message": "m", "error_number": None})
+    out = cash_repo.adjust_entry_amount(db, org_id="o1", ref_type="expense", ref_id="e1", new_amount=12.345, adjusted_by="u1")
+    sql, p = db.calls[0]
+    assert "EXEC dbo.usp_AdjustEntryAmount" in sql and p == ("o1", "expense", "e1", decimal.Decimal("12.35"), "u1") or p[3] == decimal.Decimal("12.34")
+    assert out["status"] == "adjusted"
+    for status, number in (("not_found", 50007), ("not_allowed", 50008), ("rolled_back", 50003)):  # business outcomes are returned
+        assert cash_repo.adjust_entry_amount(ProcDb({"status": status, "message": "x", "error_number": number}),
+                                             org_id="o", ref_type="sale", ref_id="s", new_amount=1, adjusted_by=None)["status"] == status
+    bad = ProcDb({"status": "rolled_back", "message": "deadlock", "error_number": 1205})
+    with pytest.raises(sales_repo.ProcedureError):
+        cash_repo.adjust_entry_amount(bad, org_id="o", ref_type="sale", ref_id="s", new_amount=1, adjusted_by=None)
+    assert bad.rollbacks == 1
+
+
+def test_record_expense_execs_procedure_and_reads_back_scoped():
+    db = ProcDb({"expense_id": "e1", "status": "committed", "message": "ok", "error_number": None}, [{"id": "e1", "org_id": "o1"}])
+    out = exp_repo.record_expense(db, org_id="o1", created_by="u1", amount=19.99, category="rent", voucher_reference="V",
+                                  description=None, expense_date=dt.date(2026, 3, 1))
+    sql, p = db.calls[0]
+    assert "EXEC dbo.usp_RecordExpense" in sql and "@expense_id = @expense_id OUTPUT" in sql and sql.count("?") == len(p) == 7
+    assert p == ("o1", "u1", decimal.Decimal("19.99"), "rent", "V", None, dt.date(2026, 3, 1))
+    assert out["status"] == "committed" and out["expense"]["id"] == "e1" and db.calls[1][1] == ("e1", "o1")
+    rej = ProcDb({"expense_id": None, "status": "rolled_back", "message": "amount must be positive", "error_number": 50003})
+    assert exp_repo.record_expense(rej, org_id="o1", created_by="u", amount=1, category="c", voucher_reference=None, description=None)["expense"] is None
+    eng = ProcDb({"expense_id": None, "status": "rolled_back", "message": "deadlock victim", "error_number": 1205})
+    with pytest.raises(sales_repo.ProcedureError):
+        exp_repo.record_expense(eng, org_id="o1", created_by="u", amount=1, category="c", voucher_reference=None, description=None)
+    assert eng.rollbacks == 1
+
+
+def test_void_expense_execs_procedure_scoped_and_maps_status():
+    db = ProcDb({"status": "voided", "message": "m", "error_number": None})
+    assert exp_repo.void_expense(db, org_id="o1", expense_id="e1", voided_by="u1") == {"status": "voided", "message": "m"}
+    sql, p = db.calls[0]
+    assert "EXEC dbo.usp_VoidExpense" in sql and p == ("o1", "e1", "u1")
+    nf = ProcDb({"status": "not_found", "message": "Expense not found", "error_number": 50007})
+    assert exp_repo.void_expense(nf, org_id="o2", expense_id="e1", voided_by=None)["status"] == "not_found"
+
+
+def test_foreign_key_violation_is_mapped_but_check_violation_is_not():
+    from core.db import Db, ForeignKeyViolationError, is_foreign_key_violation
+
+    fk = Exception("23000", "[42000] The DELETE statement conflicted with the REFERENCE constraint \"FK_sale_items_product\". (547)")
+    chk = Exception("23000", "The UPDATE statement conflicted with the CHECK constraint \"CK_products_stock\". (547)")
+    assert is_foreign_key_violation(fk) and not is_foreign_key_violation(chk)
+
+    class Cur:
+        def __init__(self, exc):
+            self.exc = exc
+
+        def execute(self, *_):
+            raise self.exc
+
+        def close(self):
+            pass
+
+    class Conn:
+        def __init__(self, exc):
+            self.exc = exc
+
+        def cursor(self):
+            return Cur(self.exc)
+
+    with pytest.raises(ForeignKeyViolationError):
+        prod_repo.delete_product_scoped(Db(Conn(fk)), product_id="p1", org_id="o1")
+    with pytest.raises(Exception) as e:
+        prod_repo.delete_product_scoped(Db(Conn(chk)), product_id="p1", org_id="o1")
+    assert not isinstance(e.value, ForeignKeyViolationError)

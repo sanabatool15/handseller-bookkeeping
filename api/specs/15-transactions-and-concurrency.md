@@ -2,7 +2,7 @@
 
 Course topic: ACID. This page explains WHERE transactions begin and end in this system, how the request-level
 transaction and the stored procedures' own transaction logic fit together, and how concurrent sales stay correct.
-T-SQL referenced here is in `sql_server/05_sale_items_cash_recordsale.sql` and has not been executed in the authoring sandbox (specs/17 #43).
+T-SQL referenced here is in `sql_server/05_sale_items_cash_recordsale.sql` and `sql_server/06_expenses_cash.sql` and has not been executed in the authoring sandbox (specs/17 #43).
 
 ## 1. Who owns the transaction?
 
@@ -10,7 +10,7 @@ T-SQL referenced here is in `sql_server/05_sale_items_cash_recordsale.sql` and h
 |---|---|
 | `routers/deps.py::get_db` | One pyodbc connection per HTTP request, `autocommit=False`. After the handler returns it calls `commit()`; on an exception `rollback()`; always `close()`. |
 | `core/db.py::Db` | `commit()` / `rollback()` are pyodbc's. `transaction(db)` (used by `register`) = commit on success, rollback on error. |
-| Stored procedures | `usp_RecordSale`, `usp_VoidSale` contain their own `BEGIN TRANSACTION` / `SAVE TRANSACTION`, `COMMIT`, `ROLLBACK` logic. |
+| Stored procedures | `usp_RecordSale`, `usp_VoidSale` (F3) and `usp_RecordExpense`, `usp_VoidExpense`, `usp_AdjustEntryAmount` (F4) contain their own `BEGIN TRANSACTION` / `SAVE TRANSACTION`, `COMMIT`, `ROLLBACK` logic. |
 | Services | Never run SQL, never call `commit()` themselves, except `auth_service.register` (explicit `transaction`). They wrap repository calls in `run_with_deadlock_retry`. |
 
 ### What "autocommit off" means on SQL Server
@@ -67,3 +67,13 @@ Consequence worth knowing: in the API flow the COMMIT really happens in `get_db`
 2. Never decide an inventory/balance change from a prior SELECT; put the guard in the `WHERE` of the one statement that changes the row and check `@@ROWCOUNT`.
 3. Anything that retries must be a complete unit of work (`run_with_deadlock_retry`); do not retry inside a half-finished transaction.
 4. New procedures: org_id in every statement (the static test `test_sale_procedure_sql_scopes_every_tenant_statement_by_org_id` shows how to scan the `.sql` file).
+
+## 7. F4 additions (expenses and amount edits)
+* **Same pattern, three more procedures** (`06_expenses_cash.sql`): `@own_tran` first, `BEGIN TRANSACTION` or `SAVE TRANSACTION sp_record_expense | sp_void_expense | sp_adjust_entry`, commit only when owned, savepoint rollback on business failure, `XACT_STATE()` in CATCH.
+  Service calls go through `run_with_deadlock_retry`; `repository.base.call_procedure` is the shared EXEC helper (rolls back and raises `ProcedureError` for engine errors, returns business outcomes).
+* **A request can run two procedures/statements in ONE transaction**: `PUT /expenses/{id}` with `{amount, description}` runs `usp_AdjustEntryAmount` (nested, savepoint) and then the metadata `UPDATE`; `get_db` commits once at the end, or rolls both back on any exception
+  (e.g. the 422 for a sale with items). A deadlock retry re-runs only the procedure call, which is safe because a deadlock victim's work was already undone.
+* **Read-modify-write of an amount**: `usp_AdjustEntryAmount` does `SELECT amount ... WITH (UPDLOCK, HOLDLOCK) WHERE id AND org_id`, computes `delta` from that locked value and posts it. Two concurrent edits of the same row queue on that lock, so each delta is
+  computed from the previous edit's committed value and `balance == SUM(ledger)` holds (gated test `test_concurrent_adjustments_of_one_expense_serialise`). Contrast with the wrong version "app reads amount, computes delta, calls UPDATE": both would use the same stale old amount.
+* **Hot row**: every expense/sale/void/adjustment of an org updates the org's single `cash_accounts` row, as the LAST write of the procedure. In the nested API flow the lock is held until the request's commit, so postings of one org are serialised per request (fine at this scale; concurrent expenses are tested).
+* **Lock order** in the procedures: the business row (`expenses`/`sales`, `UPDLOCK`) first, then `cash_accounts`, then `cash_ledger` insert: all five cash-moving procedures take `cash_accounts` last, so they cannot deadlock each other on those two resources.

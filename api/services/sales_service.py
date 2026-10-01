@@ -7,7 +7,7 @@ from typing import Any, Callable
 from core.db import Db, run_with_deadlock_retry
 
 from repository import base as repo_base
-from repository import sales_repository
+from repository import cash_repository, sales_repository
 
 
 class ValidationError(Exception):
@@ -29,6 +29,7 @@ def _require_customer(db: Db, org_id: str, customer_id: str) -> None:
 
 
 MAX_ITEMS = 200
+MAX_AMOUNT = 999_999_999_999.99  # decimal(14,2) maximum
 MAX_QTY = 1_000_000
 
 
@@ -110,19 +111,35 @@ def get_sale(db: Db, *, org_id: str, sale_id: str) -> dict[str, Any]:
     return sale
 
 
-def update_sale(db: Db, *, org_id: str, sale_id: str, updates: dict[str, Any]) -> dict[str, Any]:
-    if "amount" in updates and updates["amount"] is not None and updates["amount"] <= 0:
-        raise ValidationError("Sale amount must be positive")
+def update_sale(
+    db: Db, *, org_id: str, sale_id: str, updates: dict[str, Any], user_id: str | None = None,
+    on_event: Callable[..., None] | None = None,
+) -> dict[str, Any]:
+    """Update a sale. A changed `amount` goes through usp_AdjustEntryAmount, which posts the delta to the cash ledger in
+    the same transaction (a sale WITH line items is refused: 422). The other fields are updated in the same request."""
+    if "amount" in updates and updates["amount"] is not None:
+        if updates["amount"] <= 0:
+            raise ValidationError("Sale amount must be positive")
+        if updates["amount"] > MAX_AMOUNT:
+            raise ValidationError("Sale amount is too large")
     # customer_id is the one field where a PRESENT null is meaningful (unlink the sale); everything else drops None.
     clean_updates = {k: v for k, v in updates.items() if v is not None or k == "customer_id"}
-    if "amount" in clean_updates:
-        existing = sales_repository.get_sale_scoped(db, sale_id=sale_id, org_id=org_id)
-        if existing is None:
-            raise NotFoundError("Sale not found")
-        if existing.get("items"):  # items are immutable, so this read cannot go stale
-            raise ValidationError("The amount of a sale with line items cannot be changed (it is the sum of its items)")
     if clean_updates.get("customer_id") is not None:
         _require_customer(db, org_id, clean_updates["customer_id"])
+    new_amount = clean_updates.pop("amount", None)
+    if new_amount is not None:
+        result = run_with_deadlock_retry(
+            lambda: cash_repository.adjust_entry_amount(
+                db, org_id=org_id, ref_type="sale", ref_id=sale_id, new_amount=new_amount, adjusted_by=user_id,
+            ),
+            on_event=on_event,
+        )
+        if result["status"] == "not_found":
+            raise NotFoundError("Sale not found")
+        if result["status"] == "not_allowed":
+            raise ValidationError(result["message"] or "The amount of a sale with line items cannot be changed")
+        if result["status"] not in ("adjusted", "unchanged"):
+            raise ValidationError(result["message"] or "Amount change rejected")
     updated = sales_repository.update_sale_scoped(db, sale_id=sale_id, org_id=org_id, updates=clean_updates)
     if updated is None:
         raise NotFoundError("Sale not found")

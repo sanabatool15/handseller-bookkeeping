@@ -533,10 +533,11 @@ BEGIN
                            GROUP BY product_id) AS s ON s.product_id = p.id
              WHERE p.org_id = @org_id;
 
-            -- 2. Reverse exactly what was posted to the cash ledger for this sale (sales created before the cash
-            --    ledger existed, or whose amount was edited later, are reversed by what was really posted).
+            -- 2. Reverse exactly what was posted to the cash ledger for this sale: the 'sale' entry PLUS any 'adjustment'
+            --    entries (F4: usp_AdjustEntryAmount posts the delta of an amount edit). Sales created before the cash
+            --    ledger existed are reversed by what was really posted (possibly nothing).
             SELECT @posted = SUM(amount) FROM dbo.cash_ledger
-             WHERE org_id = @org_id AND ref_type = N'sale' AND ref_id = @sale_id AND entry_type = N'sale';
+             WHERE org_id = @org_id AND ref_type = N'sale' AND ref_id = @sale_id AND entry_type IN (N'sale', N'adjustment');
 
             IF @posted IS NOT NULL AND @posted <> 0
             BEGIN
