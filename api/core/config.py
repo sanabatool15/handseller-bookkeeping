@@ -37,6 +37,9 @@ class Settings(BaseSettings):
     # App
     app_env: str = "development"
     log_level: str = "INFO"
+    # Comma-separated allowed CORS origins, e.g. "https://d123.cloudfront.net".
+    # Defaults to "*" (dev-only); set explicitly for any real deployment.
+    cors_origins: str = "*"
 
 
 @lru_cache

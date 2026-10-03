@@ -40,3 +40,7 @@ next-env.d.ts
 # --- misc ---
 .DS_Store
 *.pem
+
+# --- aws lambda build output ---
+lambda-deployment.zip
+lambda-package/
