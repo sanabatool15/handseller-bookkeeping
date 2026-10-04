@@ -49,9 +49,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from core.fastapi_app import app as _app
 
 API_PREFIX = "/api"
+# The Inngest handler is registered at the full "/api/inngest" path in
+# core/fastapi_app.py, and AuthMiddleware/IdempotencyMiddleware exempt that
+# full path -- so it must NOT have the "/api" prefix stripped like every
+# other route (stripped, it would become "/inngest": no route, and a 401 from
+# AuthMiddleware that Inngest reports as "Unauthorized response from URL").
+INNGEST_PREFIX = "/api/inngest"
 
 
 async def app(scope, receive, send):
-    if scope["type"] == "http" and scope["path"].startswith(API_PREFIX):
+    if (
+        scope["type"] == "http"
+        and scope["path"].startswith(API_PREFIX)
+        and not scope["path"].startswith(INNGEST_PREFIX)
+    ):
         scope["path"] = scope["path"][len(API_PREFIX):] or "/"
     await _app(scope, receive, send)
