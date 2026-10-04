@@ -44,3 +44,12 @@ next-env.d.ts
 # --- aws lambda build output ---
 lambda-deployment.zip
 lambda-package/
+
+# --- terraform ---
+*.tfstate
+*.tfstate.*
+.terraform/
+terraform.tfstate.d/
+*.tfvars
+!terraform.tfvars
+!*.tfvars.example
