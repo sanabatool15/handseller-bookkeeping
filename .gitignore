@@ -52,4 +52,5 @@ lambda-package/
 terraform.tfstate.d/
 *.tfvars
 !terraform.tfvars
+!prod.tfvars
 !*.tfvars.example
