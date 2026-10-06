@@ -28,6 +28,12 @@ variable "github_repository" {
   default     = "sanabatool15/handseller-bookkeeping"
 }
 
+variable "github_repository_subject" {
+  description = "Repo identity as GitHub now writes it in the OIDC sub claim: owner@ownerId/repo@repoId"
+  type        = string
+  default     = "sanabatool15@182108070/handseller-bookkeeping@1366984633"
+}
+
 variable "github_environments" {
   description = "GitHub Environments allowed to assume the deploy role"
   type        = list(string)
@@ -112,9 +118,12 @@ resource "aws_iam_role" "github_actions" {
           "token.actions.githubusercontent.com:aud" = "sts.amazonaws.com"
         }
         StringLike = {
-          "token.actions.githubusercontent.com:sub" = [
-            for e in var.github_environments : "repo:${var.github_repository}:environment:${e}"
-          ]
+          "token.actions.githubusercontent.com:sub" = flatten([
+            for e in var.github_environments : [
+              "repo:${var.github_repository_subject}:environment:${e}", # current format (with numeric IDs)
+              "repo:${var.github_repository}:environment:${e}",         # legacy format
+            ]
+          ])
         }
       }
     }]
