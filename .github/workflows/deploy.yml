@@ -2,7 +2,7 @@ name: Deploy Handseller
 
 on:
   push:
-    branches: [main, aws]   # TEMP: aws added for pipeline debugging
+    branches: [main, aws]   # aws = pre-merge testing; drop once Bedrock work is merged to main
     paths-ignore:
       - "**.md"
       - "terraform/bootstrap/**"
@@ -38,23 +38,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-
-      - name: TEMP debug - what GitHub sends vs what AWS trusts
-        env:
-          ROLE: ${{ secrets.AWS_ROLE_ARN }}
-        run: |
-          WANT="arn:aws:iam::097087134314:role/github-actions-handseller-deploy"
-          echo "secret length=${#ROLE} expected length=${#WANT}"
-          [ "$ROLE" = "$WANT" ] && echo "AWS_ROLE_ARN: MATCH" || echo "AWS_ROLE_ARN: MISMATCH"
-          RESP=$(curl -sS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com")
-          TOKEN=$(echo "$RESP" | python3 -c "import sys,json;print(json.load(sys.stdin)['value'])")
-          echo "::add-mask::$TOKEN"
-          python3 - "$TOKEN" <<'PY'
-          import sys,json,base64
-          p=sys.argv[1].split('.')[1]; p+='='*(-len(p)%4)
-          c=json.loads(base64.urlsafe_b64decode(p))
-          print({k:c.get(k) for k in ('iss','aud','sub')})
-          PY
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
