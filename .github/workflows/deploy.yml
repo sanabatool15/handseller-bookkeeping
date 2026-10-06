@@ -1,0 +1,82 @@
+name: Deploy Handseller
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "terraform/bootstrap/**"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: develop
+        type: choice
+        options:
+          - develop
+          - test
+          - prod
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  DEFAULT_AWS_REGION: eu-north-1
+  TARGET_ENV: ${{ inputs.environment || 'develop' }}
+
+concurrency:
+  group: handseller-${{ inputs.environment || 'develop' }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment || 'develop' }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'develop' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: github-actions-deploy
+          aws-region: ${{ env.DEFAULT_AWS_REGION }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.14.5
+          terraform_wrapper: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Write app secrets for this environment
+        env:
+          TF_SECRETS: ${{ secrets.TF_SECRETS }}
+        run: |
+          test -n "$TF_SECRETS" || { echo "Repository secret TF_SECRETS is missing"; exit 1; }
+          printf '%s\n' "$TF_SECRETS" > "terraform/secrets.${TARGET_ENV}.tfvars"
+
+      - name: Deploy
+        run: |
+          chmod +x scripts/deploy.sh
+          ./scripts/deploy.sh "$TARGET_ENV"
+
+      - name: Summary
+        working-directory: terraform
+        run: |
+          {
+            echo "### Deployed to ${TARGET_ENV}"
+            echo "- App: $(terraform output -raw cloudfront_url)"
+            echo "- Inngest sync URL: $(terraform output -raw inngest_url)"
+          } >> "$GITHUB_STEP_SUMMARY"

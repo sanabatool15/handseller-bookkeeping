@@ -1,0 +1,51 @@
+[project]
+name = "handseller-bookkeeping"
+version = "0.1.0"
+description = "Agentic bookkeeping backend: FastAPI + Supabase + Redis + Inngest + FastMCP + OpenAI Agents SDK"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "supabase>=2.7.0",
+    "pydantic>=2.8.0",
+    "pydantic-settings>=2.4.0",
+    "redis>=5.0.0",
+    "inngest>=0.3.0",
+    "fastmcp>=0.2.0",
+    # >=0.22.0: the planner+handoff/BookkeepingResult architecture in
+    # ai_agents/api/financial_advisor_agent.py depends on `Runner.run_streamed`
+    # accepting `error_handlers` and `RunErrorHandlers["max_turns"]`/
+    # `RunErrorHandlerResult`, verified against the installed 0.22.3 wheel.
+    # Older versions may not have this shape — re-verify before loosening.
+    "openai-agents>=0.22.0",
+    "pyjwt>=2.9.0",
+    "python-dotenv>=1.0.1",
+    "httpx>=0.27.0",
+    "mangum>=0.19.0",
+    "pytest>=9.1.1",
+    "fakeredis>=2.38.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-mock>=3.14.0",
+    "pytest-asyncio>=0.24.0",
+    "fakeredis>=2.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+# Deliberately no [build-system]/[tool.setuptools] here: this project is
+# never `pip install`ed as a distributable package (pytest resolves
+# `from app...`/`from routers...` etc. via cwd, no editable install
+# needed -- verified). A [tool.setuptools] `packages = [...]` list used to
+# be here; it broke the Vercel deployment (its uv-based Python builder
+# read this pyproject.toml, saw 8 declared packages, and installed
+# dependencies once per package as if they were separate workspace
+# members -- 6+ redundant installs and broken routing on the deployed
+# site). Do not re-add a build-system/packages declaration here; if a
+# real editable install is ever needed, use a separate pyproject.toml
+# that Vercel's builder never sees.
