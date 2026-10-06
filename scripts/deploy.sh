@@ -1,10 +1,10 @@
 #!/bin/bash
 set -e
 
-ENVIRONMENT=${1:-dev}          # dev | test | prod
+ENVIRONMENT=${1:-develop}      # develop | test | prod
 PROJECT_NAME=${2:-handseller}
 
-case "$ENVIRONMENT" in dev|test|prod) ;; *) echo "Invalid environment: $ENVIRONMENT"; exit 1;; esac
+case "$ENVIRONMENT" in develop|test|prod) ;; *) echo "Invalid environment: $ENVIRONMENT (use develop, test or prod)"; exit 1;; esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -20,7 +20,14 @@ python aws/build_lambda.py
 
 # 2. Terraform workspace & apply
 cd terraform
-terraform init -input=false
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+AWS_REGION=${DEFAULT_AWS_REGION:-eu-north-1}
+terraform init -input=false -reconfigure \
+  -backend-config="bucket=${PROJECT_NAME}-terraform-state-${ACCOUNT_ID}" \
+  -backend-config="key=terraform.tfstate" \
+  -backend-config="region=${AWS_REGION}" \
+  -backend-config="use_lockfile=true" \
+  -backend-config="encrypt=true"
 if terraform workspace list | grep -qE "^\*?\s*${ENVIRONMENT}$"; then
   terraform workspace select "$ENVIRONMENT"
 else

@@ -1,5 +1,5 @@
 param(
-    [string]$Environment = "dev",        # dev | test | prod
+    [string]$Environment = "develop",    # develop | test | prod
     [string]$ProjectName = "handseller"
 )
 $ErrorActionPreference = "Stop"
@@ -8,8 +8,8 @@ function Check($what) {
     if ($LASTEXITCODE -ne 0) { throw "$what failed (exit code $LASTEXITCODE)" }
 }
 
-if ($Environment -notmatch '^(dev|test|prod)$') {
-    throw "Invalid environment '$Environment' (use dev, test or prod)"
+if ($Environment -notmatch '^(develop|test|prod)$') {
+    throw "Invalid environment '$Environment' (use develop, test or prod)"
 }
 
 $Root = Split-Path $PSScriptRoot -Parent
@@ -29,7 +29,15 @@ Check "Lambda build"
 
 # 2. Terraform workspace & apply
 Set-Location (Join-Path $Root "terraform")
-terraform init -input=false
+$AccountId = aws sts get-caller-identity --query Account --output text
+Check "sts get-caller-identity"
+$AwsRegion = if ($env:DEFAULT_AWS_REGION) { $env:DEFAULT_AWS_REGION } else { "eu-north-1" }
+terraform init -input=false -reconfigure `
+    "-backend-config=bucket=$ProjectName-terraform-state-$AccountId" `
+    "-backend-config=key=terraform.tfstate" `
+    "-backend-config=region=$AwsRegion" `
+    "-backend-config=use_lockfile=true" `
+    "-backend-config=encrypt=true"
 Check "terraform init"
 
 $existing = terraform workspace list | Out-String
