@@ -9,12 +9,12 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Environment name (dev, test, prod)"
+  description = "Environment name (dev = original manual stack, develop/test/prod = CI environments)"
   type        = string
   default     = "dev"
   validation {
-    condition     = contains(["dev", "test", "prod"], var.environment)
-    error_message = "Environment must be one of: dev, test, prod."
+    condition     = contains(["dev", "develop", "test", "prod"], var.environment)
+    error_message = "Environment must be one of: dev, develop, test, prod."
   }
 }
 
