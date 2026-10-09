@@ -2,7 +2,7 @@ name: Deploy Handseller
 
 on:
   push:
-    branches: [main]
+    branches: [main, aws]   # aws = pre-merge testing; drop once Bedrock work is merged to main
     paths-ignore:
       - "**.md"
       - "terraform/bootstrap/**"
