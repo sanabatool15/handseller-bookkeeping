@@ -8,17 +8,17 @@ silently reintroducing bugs that were already found and fixed once.
 
 ## What this is
 
-Agentic bookkeeping backend for a handseller business: FastAPI + Microsoft SQL Server (pyodbc)
-(Postgres) + Redis (idempotency) + Inngest (resilient background jobs) +
+Agentic bookkeeping backend for a handseller business: FastAPI + Microsoft SQL Server (pyodbc,
+T-SQL scripts in `../sql_server/`) + Redis (idempotency) + Inngest (resilient background jobs) +
 FastMCP (MCP server over stdio) + the OpenAI Agents SDK with a deterministic
-offline fallback. Full architecture, schema, and setup instructions are in
-`README.md` — this file assumes you've read it and focuses on rules and traps.
+offline fallback. Setup is in the repo-root `../README.md`, the backend reference in
+`README.md`, and the design specs in `specs/` (SQL Server work: `13`..`17`). This file
+assumes you've read them and focuses on rules and traps.
 
-This branch (`variant-5`) is the "final" implementation in a 5-step prompt
-ladder (see the project's `Prompt_Ladder_Final.docx` if present, or ask the
-user) — it is the most complete and the one intended for real production
-iteration. Do not port changes here from `variant-1`..`variant-4`; those are
-earlier/simpler experiments kept only for comparison, not upstream branches.
+This branch (`ssms-extended`) is the SQL Server version, extended with products, customers,
+sale line items, a cash ledger, and a transaction log / DB Lab (slices F0..F5). Its T-SQL has
+not yet been executed on a real SQL Server (`specs/17-open-questions.md`). Do not port changes
+from `variant-1`..`variant-5`; they are earlier experiments kept only for comparison.
 
 ## Non-negotiable architectural rules
 

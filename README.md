@@ -1,36 +1,127 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Handseller Bookkeeping
 
-## Getting Started
+Bookkeeping app for a handseller business: products and stock, customers, sales, expenses, a cash ledger, and an AI financial advisor.
+This branch (`ssms-extended`) runs on **Microsoft SQL Server** (managed from SSMS) and adds a transaction/concurrency demo layer
+(Activity log and DB Lab) for a database course.
 
-First, run the development server:
-
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+frontend   Next.js (app/, components/, lib/)         http://localhost:3000
+backend    FastAPI + pyodbc (api/)                    http://localhost:8000
+database   SQL Server, database HandsellerDB (sql_server/*.sql, run in SSMS)
+extras     Redis (idempotency), Inngest (background jobs), FastMCP, OpenAI Agents SDK
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Where things are documented
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Document | What is in it |
+|---|---|
+| [`api/README.md`](api/README.md) | Backend reference: layering, endpoints, jobs, MCP, env variables, tests |
+| [`api/specs/`](api/specs/) | Numbered design specs (see index below) |
+| [`api/CLAUDE.md`](api/CLAUDE.md) | Rules and traps for AI agents changing the backend (read before editing) |
+| [`AGENTS.md`](AGENTS.md) / [`CLAUDE.md`](CLAUDE.md) | Next.js frontend warning for AI agents; `CLAUDE.md` also pulls in `api/CLAUDE.md` |
+| [`sql_server/`](sql_server/) | The T-SQL scripts `01`..`07` and [`TEST_CASES.md`](sql_server/TEST_CASES.md) (manual checks to run in SSMS) |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Spec index (`api/specs/`)
+- `01` architecture layering, `02` schema (legacy Postgres), `03` multi-tenancy, `04` idempotency, `05` Inngest jobs, `06` agents, `07` MCP, `08` Docker, `09` testing, `10` known limitations, `11` package-name collisions, `12` Vercel
+- **SQL Server work:** `13` migration, `14` products/customers/sales/cash domain, `15` transactions and concurrency (ACID, deadlocks), `16` UI pages, `17` open questions and assumptions
 
-## Learn More
+## What is on this branch
 
-To learn more about Next.js, take a look at the following resources:
+1. **SQL Server migration** (F0a/F0b): Supabase/Postgres replaced by T-SQL via `pyodbc`; no Supabase code remains.
+2. **F1 Products & stock**, **F2 Customers**, **F3 Sales with line items + cash ledger** (`usp_RecordSale`, `usp_VoidSale`),
+   **F4 Expenses on the cash ledger** (`usp_RecordExpense`, `usp_VoidExpense`, `usp_AdjustEntryAmount`).
+3. **F5 Activity page and DB Lab**: a live per-request transaction log, plus demos of a race (overselling), a forced deadlock and the fix.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+> The T-SQL has **not been executed against a real SQL Server yet** (the authoring sandbox had none), so expect to find and fix some
+> errors on first run. Follow `sql_server/TEST_CASES.md` and note failures.
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Run it locally
 
-## Deploy on Vercel
+### 0. Prerequisites
+- Git, Node.js 20+, Python 3.11+
+- SQL Server (Developer or Express) and SSMS
+- **Microsoft ODBC Driver 18 for SQL Server** (needed by `pyodbc`)
+- Redis on `localhost:6379` (required for the `Idempotency-Key` middleware). On Windows use WSL or Docker: `docker run -p 6379:6379 redis:7`
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### 1. Get this branch
+```bash
+git fetch origin ssms-extended
+git switch -c ssms-extended --track origin/ssms-extended   # or: git checkout -b ssms-extended origin/ssms-extended
+```
+Your local `main` and `aws` branches are untouched.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+### 2. Create the database (SSMS)
+1. Connect to your instance (for example `localhost` or `localhost\SQLEXPRESS`).
+2. File > Open > File, then open each script from `sql_server/` and press **Execute** (F5), **in this order**:
+   `01_foundation.sql`, `02_sales_expenses_agents.sql`, `03_products.sql`, `04_customers.sql`,
+   `05_sale_items_cash_recordsale.sql`, `06_expenses_cash.sql`, `07_txn_log.sql`.
+   `01` creates `HandsellerDB`; every script starts with `USE HandsellerDB`. They are re-runnable.
+3. Check: `USE HandsellerDB; SELECT name FROM sys.tables;`
+
+### 3. Configure and start the backend
+```bash
+cd api
+python -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt
+cp .env.example .env               # Windows: copy .env.example .env
+```
+Edit `api/.env` (see "Connecting to SQL Server" below), then:
+```bash
+uvicorn core.fastapi_app:app --reload --port 8000
+```
+Check `http://localhost:8000/health` (`checks.database` should be ok) and `http://localhost:8000/docs`.
+To try the DB Lab set `ENABLE_DB_LAB=true` in `api/.env` and restart. Leave it `false` otherwise.
+
+### 4. Start the frontend
+```bash
+# from the repo root
+cp .env.example .env.local
+npm install
+npm run dev
+```
+Open `http://localhost:3000`. `next.config.ts` proxies `/api/*` to `http://localhost:8000`, so `NEXT_PUBLIC_API_URL=/api` is correct.
+
+## Connecting to SQL Server
+
+Set one of these in `api/.env`:
+
+**Windows login (SSMS "Windows Authentication"):**
+```
+MSSQL_SERVER=localhost            # or localhost\SQLEXPRESS, or the name shown in SSMS "Server name"
+MSSQL_DATABASE=HandsellerDB
+MSSQL_USER=
+MSSQL_PASSWORD=
+MSSQL_DRIVER=ODBC Driver 18 for SQL Server
+MSSQL_TRUST_SERVER_CERTIFICATE=1
+```
+**SQL login (for example `sa`):** same, with `MSSQL_USER` and `MSSQL_PASSWORD` filled in (enable Mixed Mode auth and TCP/IP in SQL Server Configuration Manager).
+
+**Or a full ODBC string** (wins if set):
+```
+MSSQL_CONNECTION_STRING=DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=HandsellerDB;Trusted_Connection=yes;TrustServerCertificate=yes
+```
+Common problems: driver name mismatch (check the installed name in "ODBC Data Sources"), TCP/IP disabled, a named instance needing the SQL Browser service,
+and running the API inside WSL/Docker while SQL Server is on Windows (use the Windows host IP, not `localhost`).
+
+## Running queries in SSMS while the app runs
+```sql
+USE HandsellerDB;
+SELECT * FROM orgs;          SELECT * FROM users;
+SELECT * FROM products;      SELECT * FROM customers;
+SELECT * FROM sales;         SELECT * FROM sale_items;
+SELECT * FROM expenses;      SELECT * FROM cash_ledger;   -- table names: check with sys.tables
+```
+You can also call the procedures directly (for example `usp_RecordSale`) as described in `api/specs/15-transactions-and-concurrency.md`,
+and open two query windows to reproduce blocking and deadlocks by hand.
+
+## Tests (no SQL Server needed)
+```bash
+cd api && pytest tests/unit tests/integration -v
+RUN_MSSQL=1 pytest tests/sqlserver -v      # real-DB tests, needs the setup above
+npm run lint && npm run build              # frontend
+```
+
+## Not changed by this branch
+Docker Compose files and the Vercel deployment still describe the old setup; the supported path here is local `uvicorn` + SSMS
+(`api/specs/12-vercel-deployment.md`, `13-sql-server-migration.md`).
