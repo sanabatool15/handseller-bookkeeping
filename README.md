@@ -97,17 +97,19 @@ Your local `main` and `aws` branches are untouched.
 3. Check: `USE HandsellerDB; SELECT name FROM sys.tables;`
 
 ### 3. Configure and start the backend
-```bash
+With [uv](https://docs.astral.sh/uv/) (reads `api/pyproject.toml`; `api/.python-version` pins Python 3.12):
+```powershell
 cd api
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt -r requirements-dev.txt
-cp .env.example .env               # Windows: copy .env.example .env
+uv sync --extra dev                # creates api\.venv and installs the dependencies from pyproject.toml
+copy .env.example .env             # macOS/Linux: cp .env.example .env
 ```
-Edit `api/.env` (see "Connecting to SQL Server" below), then:
-```bash
-uvicorn core.fastapi_app:app --reload --port 8000
+Edit `api/.env` (see "Connecting to SQL Server" below), then run (no need to activate the venv):
+```powershell
+uv run uvicorn index:app --reload --port 8000
 ```
+Use `index:app`, not `core.fastapi_app:app`: the frontend proxy sends requests under `/api`, which `index.py` strips.
+Without uv: `python -m venv .venv`, activate it, `pip install -r requirements.txt -r requirements-dev.txt`, then the same `uvicorn index:app ...`.
+Use Python 3.12 or newer; an old 3.11 patch release can crash while importing the OpenAI Agents SDK (`KeyError: ~TContext`).
 Check `http://localhost:8000/health` (`checks.database` should be ok) and `http://localhost:8000/docs`.
 To try the DB Lab set `ENABLE_DB_LAB=true` in `api/.env` and restart. Leave it `false` otherwise.
 
