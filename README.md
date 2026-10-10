@@ -35,29 +35,43 @@ extras     Redis (idempotency), Inngest (background jobs), FastMCP, OpenAI Agent
 > The T-SQL has **not been executed against a real SQL Server yet** (the authoring sandbox had none), so expect to find and fix some
 > errors on first run. Follow `sql_server/TEST_CASES.md` and note failures.
 
-## Run everything with one command (Docker Compose)
+## Run everything with one command (Docker Compose, using your own SQL Server)
 
+`compose.yaml` runs Redis, the FastAPI backend (live reload), the Inngest dev server and the Next.js frontend in Docker, and connects the backend
+to **the SQL Server already installed on your machine** (for example `.\SQLEXPRESS`). A one-shot `db-init` service creates `HandsellerDB` there by
+running `sql_server/01..07`. Then you browse it in SSMS exactly as usual. Needs Docker Desktop only.
+
+### One-time SQL Server setup (a Linux container cannot use Windows Authentication)
+1. **Enable TCP/IP with a fixed port.** SQL Server Configuration Manager > SQL Server Network Configuration > Protocols for SQLEXPRESS > TCP/IP: Enabled.
+   Properties > IP Addresses tab > scroll to **IPAll**: clear "TCP Dynamic Ports", set **TCP Port = 1433**. OK.
+2. **Allow SQL logins.** In SSMS connect with Windows Authentication, right-click the server > Properties > Security > "SQL Server and Windows Authentication mode".
+3. **Create or enable a login.** Security > Logins > `sa` > Properties: set a password and Status > Login: Enabled (or create a new login, server role `sysadmin`).
+4. **Restart the service.** Configuration Manager > SQL Server Services > SQL Server (SQLEXPRESS) > Restart.
+5. **Windows Firewall:** allow inbound TCP 1433 if the connection is blocked (Windows Defender Firewall > Advanced > Inbound Rules > New Rule > Port 1433).
+6. Check from SSMS: Server name `localhost,1433`, SQL Server Authentication, your login. If that works, Docker can reach it too.
+
+### Run
+Create a file named `.env` next to `compose.yaml` (it is git-ignored):
+```
+MSSQL_PASSWORD=your-sql-login-password
+MSSQL_USER=sa
+MSSQL_PORT=1433
+```
 ```bash
 docker compose up --build
 ```
-Needs only Docker Desktop. `compose.yaml` starts SQL Server, creates `HandsellerDB` by running `sql_server/01..07` (the one-shot `db-init`
-service), Redis, the FastAPI backend (live reload), the Inngest dev server and the Next.js frontend.
-
 | What | Where |
 |---|---|
 | App | http://localhost:3000 |
 | API docs | http://localhost:8000/docs |
 | Inngest UI | http://localhost:8288 |
-| SSMS | Server name `localhost,1433`, SQL Server Authentication, login `sa`, password `Handseller_Dev1!` (override with `MSSQL_SA_PASSWORD`), tick "Trust server certificate" |
+| Database | SSMS, your usual connection (`.\SQLEXPRESS`), database `HandsellerDB` |
 
-- Data lives in the `mssql-data` volume and survives restarts. Reset everything with `docker compose down -v`.
-- Re-apply the scripts after editing them: `docker compose run --rm db-init`.
+- Re-apply the scripts after editing them: `docker compose run --rm db-init`. Check what happened: `docker compose logs db-init`.
 - Optional `api/.env` (for `OPENAI_API_KEY`, `JWT_SECRET`, ...) is picked up automatically; the `MSSQL_*` and Redis values are set by compose.
-- `ENABLE_DB_LAB` defaults to `true` in compose (local demo). The first start takes a few minutes (image pulls, `npm install`).
-- Changing the SA password after the volume exists does not change it inside SQL Server: run `docker compose down -v` first.
-- Windows login (Trusted_Connection) cannot work from a Linux container, which is why compose uses the `sa` login and its own SQL Server.
-  To use the SQL Server already installed on your machine instead, follow the manual steps below.
-- `compose.yaml` was written without being able to start Docker in the authoring sandbox, so it is unverified: send the error output if something fails.
+- `ENABLE_DB_LAB` defaults to `true` in compose (local demo); set it in `.env` to change.
+- The first start takes a few minutes (image pulls, `npm install`). Stop with `docker compose down`; your data stays in SQL Server.
+- `compose.yaml` has not been run by the author (no Docker in the authoring sandbox): send the error output if something fails.
 
 ## Run it locally without Docker (separate terminals)
 

@@ -1,36 +1,29 @@
-# One command to run the whole stack:   docker compose up --build
-#   frontend  http://localhost:3000      API docs  http://localhost:8000/docs
-#   Inngest   http://localhost:8288      SSMS      server "localhost,1433", login sa, password MSSQL_SA_PASSWORD (below)
-# Optional overrides (shell env or a root .env file): MSSQL_SA_PASSWORD, ENABLE_DB_LAB, plus OPENAI_API_KEY etc. in api/.env.
+# One command to run the app:   docker compose up --build
+# Uses the SQL Server that is already installed on YOUR machine (for example .\SQLEXPRESS); no SQL Server container.
+# Needs a root .env file (git-ignored) with:
+#   MSSQL_PASSWORD=<password of your SQL login>      (required)
+#   MSSQL_USER=sa                                    (optional, default sa)
+#   MSSQL_PORT=1433                                  (optional, the fixed TCP port of your instance)
+# Setup steps for SQL Server itself (TCP/IP, SQL login, firewall) are in README.md.
+#   frontend http://localhost:3000    API docs http://localhost:8000/docs    Inngest http://localhost:8288
 
 name: handseller
 
 services:
-  mssql:
-    image: mcr.microsoft.com/mssql/server:2022-latest
-    platform: linux/amd64            # runs under emulation on Apple Silicon
-    environment:
-      ACCEPT_EULA: "Y"
-      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Handseller_Dev1!}   # must meet SQL Server's complexity rules
-    ports:
-      - "1433:1433"                  # so SSMS on your machine can connect
-    volumes:
-      - mssql-data:/var/opt/mssql
-
-  # One-shot: runs sql_server/01..07 (re-runnable), then exits.
+  # One-shot: runs sql_server/01..07 on your SQL Server (creates HandsellerDB; re-runnable), then exits.
   db-init:
     build: ./api
     command: ["python", "scripts/apply_sql.py", "/sql_server"]
     environment: &mssql-env
-      MSSQL_SERVER: mssql
-      MSSQL_USER: sa
-      MSSQL_PASSWORD: ${MSSQL_SA_PASSWORD:-Handseller_Dev1!}
+      MSSQL_SERVER: host.docker.internal,${MSSQL_PORT:-1433}   # your Windows SQL Server, seen from inside Docker
+      MSSQL_USER: ${MSSQL_USER:-sa}
+      MSSQL_PASSWORD: ${MSSQL_PASSWORD:?set MSSQL_PASSWORD in a root .env file}
       MSSQL_DATABASE: HandsellerDB
       MSSQL_TRUST_SERVER_CERTIFICATE: "1"
     volumes:
       - ./sql_server:/sql_server:ro
-    depends_on:
-      - mssql
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # already built in on Docker Desktop; needed on plain Linux
     restart: "no"
 
   redis:
@@ -53,6 +46,8 @@ services:
       INNGEST_BASE_URL: http://inngest:8288
       INNGEST_DEV: "1"
       ENABLE_DB_LAB: ${ENABLE_DB_LAB:-true}   # demo-only concurrency lab; set false for anything but local use
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./api:/app                   # live reload while you edit the backend
     ports:
@@ -87,6 +82,3 @@ services:
       - "3000:3000"
     depends_on:
       - api
-
-volumes:
-  mssql-data:
