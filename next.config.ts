@@ -10,7 +10,8 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/api/:path*",
-        destination: "http://localhost:8000/api/:path*",
+        // compose.yaml sets API_PROXY_DEST=http://api:8000/:path* (the container serves unprefixed routes).
+        destination: process.env.API_PROXY_DEST ?? "http://localhost:8000/api/:path*",
       },
     ];
   },

@@ -35,7 +35,31 @@ extras     Redis (idempotency), Inngest (background jobs), FastMCP, OpenAI Agent
 > The T-SQL has **not been executed against a real SQL Server yet** (the authoring sandbox had none), so expect to find and fix some
 > errors on first run. Follow `sql_server/TEST_CASES.md` and note failures.
 
-## Run it locally
+## Run everything with one command (Docker Compose)
+
+```bash
+docker compose up --build
+```
+Needs only Docker Desktop. `compose.yaml` starts SQL Server, creates `HandsellerDB` by running `sql_server/01..07` (the one-shot `db-init`
+service), Redis, the FastAPI backend (live reload), the Inngest dev server and the Next.js frontend.
+
+| What | Where |
+|---|---|
+| App | http://localhost:3000 |
+| API docs | http://localhost:8000/docs |
+| Inngest UI | http://localhost:8288 |
+| SSMS | Server name `localhost,1433`, SQL Server Authentication, login `sa`, password `Handseller_Dev1!` (override with `MSSQL_SA_PASSWORD`), tick "Trust server certificate" |
+
+- Data lives in the `mssql-data` volume and survives restarts. Reset everything with `docker compose down -v`.
+- Re-apply the scripts after editing them: `docker compose run --rm db-init`.
+- Optional `api/.env` (for `OPENAI_API_KEY`, `JWT_SECRET`, ...) is picked up automatically; the `MSSQL_*` and Redis values are set by compose.
+- `ENABLE_DB_LAB` defaults to `true` in compose (local demo). The first start takes a few minutes (image pulls, `npm install`).
+- Changing the SA password after the volume exists does not change it inside SQL Server: run `docker compose down -v` first.
+- Windows login (Trusted_Connection) cannot work from a Linux container, which is why compose uses the `sa` login and its own SQL Server.
+  To use the SQL Server already installed on your machine instead, follow the manual steps below.
+- `compose.yaml` was written without being able to start Docker in the authoring sandbox, so it is unverified: send the error output if something fails.
+
+## Run it locally without Docker (separate terminals)
 
 ### 0. Prerequisites
 - Git, Node.js 20+, Python 3.11+
