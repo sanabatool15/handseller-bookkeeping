@@ -1,4 +1,35 @@
-# Open questions (SQL Server migration)
+# Open questions (SQL Server migration): decisions that were assumed
+
+## In plain words (read this first)
+
+**What is this file?** While building, the AI could not ask you every question. Each time it had to guess, it wrote the guess here as a numbered item: what was unclear, what it assumed, and what to change if the guess was wrong. So this is a list of *design decisions*, not bugs.
+
+**How to use it:** you do not need to read all 77. Know the ten below, and look up the rest only if a teacher asks "why did you do X?".
+
+**The ten decisions most worth knowing**
+
+| # | Decision | Why |
+|---|---|---|
+| 1 | `OUTPUT ... INTO @table` instead of `OUTPUT INSERTED.*` | SQL Server error 334 when a table has a trigger |
+| 2 | Emails are case-insensitive | SQL Server's default collation |
+| 31 | Deleting a customer who has sales is refused (409) | detaching would rewrite sales history |
+| 32 | Foreign key is `(customer_id, org_id)`, not just `customer_id` | the database itself blocks another business's customer |
+| 42 | Procedures return business errors through OUTPUT, not `THROW` | a THROW would force a full rollback and could undo the caller's work |
+| 43 | A procedure is "owner" from SSMS but "nested" from the API | depends on whether a transaction is already open |
+| 50 | Cash balance may go negative | a seller can spend before cashing up |
+| 53 | Old sales/expenses (before the ledger) are not back-filled | no opening-balance concept yet |
+| 65-66 | Commit now happens before the response is sent | FastAPI would otherwise commit after the 201 is out |
+| 70 | DB Lab "safe" mode only runs the guarded stock `UPDATE` | so the demo leaves no sales or ledger rows behind |
+
+**Honest limits to mention if asked**
+* Several T-SQL pieces were first written without a SQL Server to run them; register, products, customers and normal sales have since been run locally, but void, expenses, cash adjustments and the DB Lab buttons still need a person to verify them.
+* There is no stock-movement history table (item 23); the `reason` on adjust-stock is not stored.
+* No pagination UI on Activity and Cash (items 62, 77).
+* Error text matching for product delete depends on English SQL Server messages (item 54).
+
+---
+
+## Developer reference (original notes)
 
 1. **OUTPUT INSERTED.* vs triggers.** Why unsure: the brief says `OUTPUT INSERTED.*`, but tables with
    enabled triggers reject OUTPUT without INTO (error 334) and every table gets an updated_at trigger.

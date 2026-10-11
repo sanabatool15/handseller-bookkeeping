@@ -1,5 +1,68 @@
 # SQL Server migration (Supabase/Postgres -> Microsoft SQL Server)
 
+## In plain words (read this first)
+
+**In one line:** the app used to store data in Supabase (Postgres). Now it stores everything in Microsoft SQL Server, and talks to it with the T-SQL language.
+
+**What changed for you as a user of the app?** Nothing visible. Same pages, same API. The database underneath changed.
+
+**What changed underneath?**
+
+| Before (Supabase) | Now (SQL Server) |
+|---|---|
+| Supabase client, `db.table("sales").select(...)` | Plain SQL strings sent with `pyodbc` (a Python library that talks to SQL Server) |
+| Tables created in Supabase | Tables created by the numbered scripts in `sql_server/01..07_*.sql` |
+| No stored procedures | Stored procedures for money operations (`usp_RecordSale` and friends, see spec 15) |
+
+**The life of one request** (this is a good thing to be able to draw on a whiteboard):
+
+```
+Browser -> router (HTTP only) -> service (rules) -> repository (the only place with SQL) -> SQL Server
+                                                          |
+                                      get_db: one connection per request, commit at the end, rollback on error
+```
+
+**Six SQL Server ideas used in this spec, in simple words**
+
+1. **Trigger** = a small program that SQL Server runs by itself after an event. Here: after every `UPDATE`, a trigger sets `updated_at = now`.
+2. **`OUTPUT ... INTO @table`** = "give me back the row I just changed". SQL Server refuses the short form (`OUTPUT INSERTED.*`) on a table that has a trigger (error 334), so we send the result into a temporary table variable first and then `SELECT` it.
+3. **`org_id` on every table** = every business (organisation) only sees its own rows. Every query that touches one row filters by `id` AND `org_id`.
+4. **Case-insensitive text**: SQL Server's default collation treats `A@x.com` and `a@x.com` as the same, so emails and SKUs are unique ignoring case.
+5. **No deferrable foreign keys**: SQL Server cannot postpone an FK check, so `orgs.owner_id` and `users.org_id` are allowed to be `NULL` for a moment while registration creates both rows.
+6. **Parameter placeholders `?`**: the values are never pasted into the SQL text, they are sent separately. That stops SQL injection.
+
+**Where am I in the real run?** Register, products, customers and normal sales have been run against a real SQL Server locally. Void, expenses, cash adjustments and the DB Lab buttons have not been verified by a person yet.
+
+**Try it in SSMS**
+
+```sql
+USE HandsellerDB;
+SELECT name FROM sys.tables ORDER BY name;          -- all tables from the 7 scripts
+SELECT name FROM sys.triggers ORDER BY name;        -- the updated_at triggers
+SELECT name FROM sys.procedures ORDER BY name;      -- the usp_* procedures
+```
+
+Trigger demo (changes one product's name and shows `updated_at` moving):
+
+```sql
+DECLARE @id uniqueidentifier = (SELECT TOP 1 id FROM products);
+SELECT name, updated_at FROM products WHERE id = @id;
+UPDATE products SET name = name WHERE id = @id;      -- no real change, trigger still fires
+SELECT name, updated_at FROM products WHERE id = @id;
+```
+
+**Questions a teacher may ask**
+
+* *Why a trigger for `updated_at`?* So the timestamp is right even if some other code updates the row; nobody can forget it.
+* *Why does the app return the old `updated_at` right after an update?* `OUTPUT` captures the row before the AFTER trigger runs. A later GET shows the new value.
+* *Why `org_id` in every query and 404 instead of 403?* Tenant isolation; 403 would tell an attacker the record exists.
+* *Where is SQL allowed?* Only in `repository/`. A test enforces it.
+* *Why `?` placeholders?* Prevents SQL injection.
+
+---
+
+## Developer reference (original notes)
+
 ## What and why
 The backend is moving from Supabase (Postgres via the `supabase` client) to Microsoft
 SQL Server (T-SQL via `pyodbc`). The user runs everything manually (SSMS + `uvicorn`);

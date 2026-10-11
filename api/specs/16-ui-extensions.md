@@ -1,5 +1,36 @@
 # UI extensions (Products, Customers, Cash, Activity, DB Lab)
 
+## In plain words (read this first)
+
+**In one line:** five new pages in the sidebar, one for each new database feature.
+
+| Page | What you do there | The database idea it shows |
+|---|---|---|
+| **Products** | add products, set price and stock, adjust stock, see "low stock" | constraints, safe stock update |
+| **Customers** | add customers, search by name/phone, see total spent | unique rules, foreign key, `LEFT JOIN` + `GROUP BY` |
+| **Cash** | see the balance, monthly summary, every money movement | the ledger, `SUM`, balance == ledger |
+| **Activity** | see each money request and whether it committed, retried, was rejected or rolled back | transactions, deadlock retry, the `txn_log` table |
+| **DB Lab** | press buttons that create a race or a deadlock on purpose | race condition, isolation levels, deadlock |
+
+**Suggested demo order for the teacher (about 5 minutes)**
+
+1. Products: create a product with stock 1.
+2. Sales: sell 1 (stock becomes 0, cash goes up). Try selling 1 more: the app says not enough stock (409), nothing changes.
+3. Cash: show the new ledger line and the balance.
+4. Activity: show the committed request and the rejected one ("rejected" is a business rule, not an engine rollback).
+5. DB Lab (turn on `ENABLE_DB_LAB=true`): Race sale with `unsafe` mode shows oversell, `safe` mode shows one winner. Force deadlock shows error 1205 and a retry. Deadlock fixed shows no victim.
+
+**Questions a teacher may ask**
+
+* *Why does DB Lab exist?* So concurrency problems can be seen live, not just explained.
+* *Is it safe?* It is marked demo only, restores stock afterwards, and must not be enabled for real users.
+* *Why does the Activity page say "suspected" lock wait?* The app only measures time; it cannot observe locks.
+* *What does "rejected" mean vs "rolled back"?* Rejected = a business rule said no (for example not enough stock). Rolled back = an engine error undid the work.
+
+---
+
+## Developer reference (original notes)
+
 What each page is for, which API it uses, and where it is tested. Next.js pages live under `app/(app)/<name>/page.tsx`, hooks in `lib/use-*.ts`, shared types in `lib/types.ts`, the navigation in `components/layout/sidebar.tsx`.
 There is no browser test framework in the project: pages are verified by `npm run lint` + `npm run build` (type-checks them) and by the manual steps in `sql_server/TEST_CASES.md`; the APIs behind them are covered by backend tests.
 

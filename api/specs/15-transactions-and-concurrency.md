@@ -1,4 +1,95 @@
-# Transactions and concurrency (slice F3 onward; F5 adds the transaction log and the DB Lab, sections 8-12)
+# Transactions and concurrency (ACID, procedures, races, deadlocks, Activity log, DB Lab)
+
+## In plain words (read this first)
+
+**In one line:** when one sale changes four things (stock, sale lines, cash balance, ledger), either all four happen or none. This spec explains how, and what happens when two people act at the same moment.
+
+**ACID in this project**
+
+| Letter | Meaning | Where you see it here |
+|---|---|---|
+| **A**tomic | all or nothing | `usp_RecordSale` rolls everything back if one item has not enough stock |
+| **C**onsistent | rules always hold | `CHECK stock >= 0`, foreign keys, `balance == SUM(ledger)` |
+| **I**solated | simultaneous users do not corrupt each other | the guarded `UPDATE`, row locks |
+| **D**urable | committed data survives a crash | `COMMIT` writes to the transaction log |
+
+**The three words you must be able to explain**
+
+* **Commit** = make the changes permanent. **Rollback** = undo everything since the transaction began.
+* **Savepoint** (`SAVE TRANSACTION name`) = a bookmark inside a transaction; you can undo back to it without undoing earlier work. Used for "skip the bad item, keep the good ones".
+* **Nested** = the procedure was called while the caller already had a transaction open. Then the procedure must not commit; the caller decides.
+
+**How the procedure decides who owns the transaction**
+
+```
+@own_tran = 1 if @@TRANCOUNT = 0 at the start
+  own    -> BEGIN TRANSACTION ... COMMIT (or ROLLBACK)
+  nested -> SAVE TRANSACTION sp ... (no commit; on failure ROLLBACK to sp)
+```
+
+From SSMS the procedure is the owner and commits itself. From the API the request already has a transaction, so the procedure only sets a savepoint, and `get_db` commits at the end.
+
+**Why business problems are returned, not raised**
+"Not enough stock" comes back in `@status`, `@message`, `@error_number` (50001) instead of an error. A raised error puts the transaction in a doomed state where only a full rollback is allowed, which would also destroy the caller's own work.
+
+**Races and locks, simple version**
+* **Race condition**: two users act at once and the result depends on timing. Example: both buy the last unit.
+* **Lock**: SQL Server makes the second user wait while the first changes a row. The guarded `UPDATE ... WHERE stock_qty >= @q` is one statement, so the check and the change happen under one lock.
+* **Isolation level**: how much one transaction may see of another. Default is READ COMMITTED. SERIALIZABLE is the strictest (more locks, more deadlocks). SNAPSHOT uses row versions and needs a database setting.
+
+**Deadlock, simple version**
+User 1 holds product A and wants B; user 2 holds B and wants A. Both wait for ever. SQL Server detects this, kills one transaction (the **victim**, error **1205**) and the app **retries** it up to 3 times (`run_with_deadlock_retry`). Prevention: always lock in the same order (the procedure sorts items by `product_id`).
+
+**What the Activity page and DB Lab are**
+* **Activity** (`txn_log` table): a log that shows each money request: started, retried, deadlock caught, committed, rolled back. It is written on a *separate* connection after the transaction ends, so even rolled-back requests leave a trace.
+* **DB Lab**: demo buttons that start several real transactions at once (Race sale, Force deadlock, Deadlock fixed). Only on when `ENABLE_DB_LAB=true`.
+* "Lock wait suspected" is a guess from elapsed time. The app cannot see locks directly.
+
+**Try it in SSMS: see a lock with two query windows**
+
+Use the demo product `F3-MUG` from the sale demos (any product works).
+
+```sql
+-- Window A
+USE HandsellerDB;
+BEGIN TRAN;
+UPDATE products SET stock_qty = stock_qty + 1 WHERE sku = N'F3-MUG';
+-- do NOT commit yet
+```
+```sql
+-- Window B (runs and then hangs, waiting for A)
+USE HandsellerDB;
+UPDATE products SET stock_qty = stock_qty + 1 WHERE sku = N'F3-MUG';
+```
+```sql
+-- Window A again: look at who waits, then release
+SELECT request_session_id, resource_type, request_mode, request_status FROM sys.dm_tran_locks WHERE request_status = 'WAIT';
+COMMIT;      -- window B now finishes
+```
+Afterwards put the stock back with `UPDATE products SET stock_qty = stock_qty - 2 WHERE sku = N'F3-MUG';`.
+
+**Try it: a real deadlock with two windows** (products `F3-MUG` and `F3-PEN`)
+
+1. Window A: `BEGIN TRAN; UPDATE products SET stock_qty = stock_qty WHERE sku = N'F3-MUG';`
+2. Window B: `BEGIN TRAN; UPDATE products SET stock_qty = stock_qty WHERE sku = N'F3-PEN';`
+3. Window A: `UPDATE products SET stock_qty = stock_qty WHERE sku = N'F3-PEN';` (waits)
+4. Window B: `UPDATE products SET stock_qty = stock_qty WHERE sku = N'F3-MUG';` (deadlock; within a few seconds one window gets error 1205)
+5. The other window can now `COMMIT`; the victim window is already rolled back.
+
+Or use the DB Lab page buttons.
+
+**Questions a teacher may ask**
+
+* *Why is `@own_tran` computed first?* Because a later SELECT may open an implicit transaction and make a fresh call look nested.
+* *Why a savepoint and not a full rollback for one bad item?* To keep the good items in the same sale.
+* *Why is `stock_qty - @q ... WHERE stock_qty >= @q` safe?* The check and the write are one atomic statement under a row lock.
+* *How are deadlocks avoided and handled?* Same lock order to avoid; victim retry to handle.
+* *Why is the log written outside the transaction?* Otherwise a rollback would erase the log of the failure.
+* *Table variables and rollback?* Table variables are *not* rolled back, which is why the skipped-items list survives a savepoint rollback.
+
+---
+
+## Developer reference (original notes)
 
 Course topic: ACID. This page explains WHERE transactions begin and end in this system, how the request-level
 transaction and the stored procedures' own transaction logic fit together, and how concurrent sales stay correct.

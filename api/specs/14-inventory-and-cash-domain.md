@@ -1,4 +1,70 @@
-# Inventory and cash domain (F1 onward)
+# Inventory and cash domain (products, customers, sale items, cash ledger, expenses)
+
+## In plain words (read this first)
+
+**In one line:** besides recording "I sold something for X", the app now knows *what* was sold (products and stock), *to whom* (customers) and *where the money went* (a cash ledger).
+
+**Who uses it and how?** A small seller (one business = one `org`). They add products with a price and stock, optionally add customers, then record a sale by picking products and quantities. The app reduces the stock and adds money to the cash balance. Expenses reduce the cash balance. A seller can void (cancel) a sale or expense, and the stock and cash go back.
+
+**The five tables and what each is for**
+
+| Table | Think of it as | Key rule |
+|---|---|---|
+| `products` | the shelf: name, SKU, price, stock | `stock_qty >= 0`, SKU unique per business |
+| `customers` | the address book | phone unique per business (but phone may be empty) |
+| `sale_items` | the lines on a receipt | `line_total = quantity * unit_price`, computed by the database itself |
+| `cash_accounts` | the cash box: ONE row per business with the current balance | updated with `balance = balance + X` |
+| `cash_ledger` | the notebook: every money movement, never edited | each row stores the balance after it |
+
+**The most important rule (viva favourite):** `balance` in `cash_accounts` must always equal the sum of `amount` in `cash_ledger`. Everything in this spec exists to keep that true.
+
+**Why is `customers` a separate table and not just a name on the sale?**
+A name typed on each sale cannot tell two "Ali"s apart, cannot hold a phone number, and cannot give "total spent by this customer". A separate table stores the person once and each sale points to them with `customer_id`. The old free-text `customer_name` still works.
+
+**Five design ideas, in simple words**
+
+1. **The stock check and the stock change are ONE statement.**
+   `UPDATE products SET stock_qty = stock_qty - 2 WHERE id = ... AND stock_qty >= 2`
+   If 0 rows changed, the stock was not enough (or the product does not exist). The wrong way is "read the stock, check in Python, then write": two buyers can both read "1 left" and both buy it (a *lost update*, you sell one item twice).
+2. **Constraints are the last safety net.** Even if the app has a bug, the database refuses negative stock (`CHECK`), duplicate SKU (`UNIQUE`) and a sale pointing to another business's customer (composite foreign key).
+3. **A filtered unique index for phone.** `UNIQUE (org_id, phone) WHERE phone IS NOT NULL`. A normal UNIQUE would allow only one customer without a phone. The filter fixes that.
+4. **Void reverses what the ledger says was posted**, not what the sale says today. This is why the balance never drifts, even after editing an amount.
+5. **Negative cash balance is allowed.** A seller may buy stock before cashing up. This is a business choice, not a bug.
+
+**Try it in SSMS**
+
+```sql
+USE HandsellerDB;
+DECLARE @org uniqueidentifier = (SELECT TOP 1 id FROM orgs);
+
+-- 1. CHECK constraint: negative stock is refused (error 547)
+INSERT products(org_id, name, sku, price, stock_qty) VALUES (@org, N'Bad', N'BAD-1', 1.00, -1);
+
+-- 2. UNIQUE: same SKU twice is refused (error 2627)
+INSERT products(org_id, name, sku, price, stock_qty) VALUES (@org, N'A', N'DUP-1', 1.00, 1);
+INSERT products(org_id, name, sku, price, stock_qty) VALUES (@org, N'B', N'DUP-1', 1.00, 1);
+DELETE FROM products WHERE sku = N'DUP-1';
+
+-- 3. The big invariant: these two numbers must match
+SELECT a.balance,
+       (SELECT SUM(l.amount) FROM cash_ledger l WHERE l.org_id = a.org_id) AS ledger_sum
+FROM cash_accounts a WHERE a.org_id = @org;
+```
+
+If the two numbers in step 3 differ, either old sales exist from before the ledger existed (no back-fill was done) or something is wrong.
+
+**Questions a teacher may ask**
+
+* *Why a ledger and not just a balance?* The balance alone cannot explain itself. The ledger is the history and the audit trail.
+* *Why is `line_total` a computed column?* The database calculates it, so it can never disagree with quantity and price.
+* *Why are customer deletes refused (409) when they have sales?* Deleting would either lose sale history or silently rewrite it. The user must unlink first.
+* *Why is a product with sales not deletable?* The foreign key from `sale_items` blocks it. Deactivate it (`is_active = 0`) instead.
+* *Why is a composite FK `(id, org_id)` used?* So the database itself blocks cross-business links.
+* *What happens if two buyers want the last unit?* One succeeds, the other updates 0 rows and gets a 409 (see spec 15).
+
+---
+
+## Developer reference (original notes)
 
 This spec grows slice by slice. Each section says what was built, why, where it is tested, and what is NOT covered.
 
