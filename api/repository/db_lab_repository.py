@@ -1,4 +1,4 @@
-"""DB Lab repository (DEMO ONLY, gated by ENABLE_DB_LAB; see specs/16). All SQL of the concurrency demos lives here.
+"""DB Lab repository (DEMO ONLY, gated by ENABLE_DB_LAB; see docs/FRONTEND.md). All SQL of the concurrency demos lives here.
 
 Every statement is static, uses `?` placeholders and carries org_id. The only things that are not parameters:
   * WAITFOR DELAY: a fixed literal per allowed number of seconds (`_WAIT`); the delay is looked up in that dict

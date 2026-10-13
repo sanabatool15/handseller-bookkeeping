@@ -2,7 +2,7 @@
 
 Everything here is switched off unless ENABLE_DB_LAB=true (the router answers 404 for every lab route then).
 
-How the demos work (specs/16, specs/15):
+How the demos work (docs/FRONTEND.md, docs/SQL_TRANSACTIONS.md):
   * Every client is a THREAD with its OWN pyodbc connection (`clients.get_db_connection()`), closed in a `finally`, so the
     clients really contend inside SQL Server (they are not serialised by one shared connection).
   * Every client has its own `TxnRecorder` and request id; its events are flushed through the separate autocommit connection

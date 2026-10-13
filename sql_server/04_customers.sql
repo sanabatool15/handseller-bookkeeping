@@ -3,7 +3,7 @@
    Adds: table customers, idx_customers_org_id, UQ_customers_org_phone (FILTERED unique index),
          UQ_customers_id_org, trg_customers_updated_at (AFTER UPDATE trigger maintaining updated_at);
          column sales.customer_id (nullable) + FK_sales_customer + idx_sales_org_customer.
-   Requires 01_foundation.sql, 02_sales_expenses_agents.sql. Re-runnable: nothing is dropped.
+   Requires 01_foundation.sql, 02_sales_expenses.sql. Re-runnable: nothing is dropped.
 
    Design notes
    * UNIQUE (org_id, phone) must ignore customers WITHOUT a phone. A plain UNIQUE constraint/index
@@ -18,7 +18,7 @@
      so the database itself refuses a sale that points at another org's customer. With a NULL
      customer_id the FK is not checked.
    * No ON DELETE action: deleting a customer that still has sales is refused (the API checks
-     in the same DELETE statement and answers 409; the FK is the backstop, error 547). See api/specs/14.
+     in the same DELETE statement and answers 409; the FK is the backstop, error 547). See docs/SQL_SERVER.md.
    * No Row Level Security (same decision as 01..03): the application layer (id AND org_id) is the control.
    * Because the table has an AFTER UPDATE trigger, repository code uses `OUTPUT ... INTO @table` (error 334).
    ============================================================================= */

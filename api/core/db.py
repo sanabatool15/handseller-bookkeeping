@@ -1,14 +1,14 @@
 """SQL Server access primitives (pyodbc).
 
 Only `repository/*.py` may call `Db.query/query_one/execute`; services and
-routers must never write SQL (see specs/01 and specs/13).
+routers must never write SQL (see docs/BACKEND.md and docs/SQL_SERVER.md).
 
 * `Db` wraps ONE pyodbc connection with autocommit OFF.
 * `transaction(db)` commits on success and rolls back on any exception.
 * `run_with_deadlock_retry(fn)` re-runs a unit of work when SQL Server picks it
   as a deadlock victim (error 1205) or a lock wait times out (1222).
 * Rows come back as plain dicts with JSON-friendly values so response shapes are
-  identical to the old Supabase ones: uniqueidentifier -> str, Decimal -> float,
+  JSON-friendly: uniqueidentifier -> str, Decimal -> float,
   date/datetime -> ISO string.
 
 pyodbc is imported lazily so unit tests run without an ODBC driver installed.

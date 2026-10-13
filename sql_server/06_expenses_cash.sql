@@ -69,7 +69,7 @@ BEGIN
     SET NOCOUNT ON;
     SET XACT_ABORT ON;
 
-    -- Must be the FIRST thing we look at: do we own the transaction? (see 05 and specs/15)
+    -- Must be the FIRST thing we look at: do we own the transaction? (see 05 and docs/SQL_TRANSACTIONS.md)
     DECLARE @own_tran     bit = CASE WHEN @@TRANCOUNT = 0 THEN 1 ELSE 0 END;
     DECLARE @tran_started bit = 0;
     DECLARE @fail_number  int           = NULL;

@@ -2,7 +2,7 @@
 
 Expenses move CASH: create / delete / amount edits go through stored procedures (usp_RecordExpense, usp_VoidExpense,
 usp_AdjustEntryAmount) that update the expense, the cash balance and the cash ledger in ONE transaction. Each call is
-a complete unit of work wrapped in run_with_deadlock_retry (see specs/15)."""
+a complete unit of work wrapped in run_with_deadlock_retry (see docs/SQL_TRANSACTIONS.md)."""
 from __future__ import annotations
 
 from typing import Any, Callable

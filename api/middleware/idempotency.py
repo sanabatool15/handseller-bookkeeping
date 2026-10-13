@@ -1,44 +1,32 @@
-"""Redis-backed idempotency middleware for mutating requests.
+"""Idempotency middleware for mutating requests (answers are saved in SQL Server, no Redis).
 
 Contract:
   * Every POST/PUT/PATCH request MUST include an `Idempotency-Key` header.
-  * On first sight of a key, the request is processed normally; the response
-    status code + body + headers are cached in Redis under
-    `idempotency:{org_id}:{key}` for `IDEMPOTENCY_TTL_SECONDS` (default 24h).
-  * On a repeat request with the same key (scoped per-org so two tenants can't
-    collide), the cached response is returned immediately without re-running
-    the handler.
-  * A short-lived "in-flight" lock prevents two concurrent requests with the
-    same key from both executing the handler (returns 409 to the loser).
+  * First time a key is seen: the request runs normally and its answer (status + body) is saved in the
+    `idempotency_keys` table for `IDEMPOTENCY_TTL_SECONDS` (default 24h). Key + business (org) together are unique.
+  * Same key again: the saved answer is returned at once, the handler does not run again.
+  * Same key while the first request is still running: answer 409.
+  * Server errors (5xx) are never saved, so the client can retry.
 """
 from __future__ import annotations
 
 import json
 
+from fastapi.concurrency import run_in_threadpool
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from core.clients import get_redis_checked
 from core.config import get_settings
+from services import idempotency_service
 
 MUTATING_METHODS = {"POST", "PUT", "PATCH"}
 EXEMPT_PATHS = {"/auth/login", "/auth/register"}
 
 
-def _cache_key(org_scope: str, idem_key: str) -> str:
-    return f"idempotency:{org_scope}:{idem_key}"
-
-
-def _lock_key(org_scope: str, idem_key: str) -> str:
-    return f"idempotency-lock:{org_scope}:{idem_key}"
-
-
 class IdempotencyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
         if request.method not in MUTATING_METHODS or request.url.path in EXEMPT_PATHS:
-            return await call_next(request)
-        if request.url.path.startswith("/api/inngest"):
             return await call_next(request)
 
         idem_key = request.headers.get("Idempotency-Key")
@@ -47,23 +35,18 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 status_code=400,
                 content={"detail": "Idempotency-Key header is required for mutating requests"},
             )
+        if len(idem_key) > 200:
+            return JSONResponse(status_code=400, content={"detail": "Idempotency-Key is too long (max 200 characters)"})
 
-        # Scope the cache key per-org (falls back to "anon" pre-auth, e.g. register)
+        # Scope per business (falls back to "anon" before login)
         user = getattr(request.state, "user", None)
-        org_scope = user.org_id if user else "anon"
-        cache_key = _cache_key(org_scope, idem_key)
-        lock_key = _lock_key(org_scope, idem_key)
+        org_scope = str(user.org_id) if user else "anon"
+        ttl = get_settings().idempotency_ttl_seconds
 
-        redis = await get_redis_checked()
-        settings = get_settings()
-
-        cached = await redis.get(cache_key)
-        if cached is not None:
-            payload = json.loads(cached)
-            return JSONResponse(status_code=payload["status_code"], content=payload["body"])
-
-        got_lock = await redis.set(lock_key, "1", nx=True, ex=30)
-        if not got_lock:
+        state, cached = await run_in_threadpool(idempotency_service.begin, org_scope, idem_key, ttl)
+        if state == "cached":
+            return JSONResponse(status_code=cached["status_code"], content=cached["body"])
+        if state == "in_progress":
             return JSONResponse(
                 status_code=409,
                 content={"detail": "A request with this Idempotency-Key is already being processed"},
@@ -75,17 +58,14 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
             async for chunk in response.body_iterator:
                 body_bytes += chunk
 
-            try:
-                body_json = json.loads(body_bytes.decode() or "null")
-            except json.JSONDecodeError:
-                body_json = body_bytes.decode(errors="replace")
-
             if response.status_code < 500:
-                await redis.set(
-                    cache_key,
-                    json.dumps({"status_code": response.status_code, "body": body_json}),
-                    ex=settings.idempotency_ttl_seconds,
-                )
+                try:
+                    body_json = json.loads(body_bytes.decode() or "null")
+                except json.JSONDecodeError:
+                    body_json = body_bytes.decode(errors="replace")
+                await run_in_threadpool(idempotency_service.finish, org_scope, idem_key, response.status_code, body_json)
+            else:
+                await run_in_threadpool(idempotency_service.abandon, org_scope, idem_key)
 
             return Response(
                 content=body_bytes,
@@ -93,5 +73,6 @@ class IdempotencyMiddleware(BaseHTTPMiddleware):
                 headers=dict(response.headers),
                 media_type=response.media_type,
             )
-        finally:
-            await redis.delete(lock_key)
+        except BaseException:
+            await run_in_threadpool(idempotency_service.abandon, org_scope, idem_key)
+            raise

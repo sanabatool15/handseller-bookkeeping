@@ -63,7 +63,7 @@ def create_sale(
     items: list[dict[str, Any]] | None = None, skip_invalid_items: bool = False,
     on_event: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
-    """Record a sale ATOMICALLY (stock, cash balance and ledger move together; see specs/15).
+    """Record a sale ATOMICALLY (stock, cash balance and ledger move together; see docs/SQL_TRANSACTIONS.md).
 
     With `items` the total is the sum of the lines (`amount` is ignored); without items `amount` is required
     (old behaviour). Raises ValidationError (422), NotFoundError (404: customer/product), InsufficientStockError (409).

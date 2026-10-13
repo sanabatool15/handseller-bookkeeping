@@ -108,7 +108,7 @@ def delete_product(db: Db, *, org_id: str, product_id: str) -> None:
 
 
 def adjust_stock(db: Db, *, org_id: str, product_id: str, delta: int, reason: str | None = None) -> dict[str, Any]:
-    """Add/remove stock atomically. `reason` is validated but not persisted yet (no stock-movement table; specs/17)."""
+    """Add/remove stock atomically. `reason` is validated but not persisted yet (no stock-movement table; docs/SQL_SERVER.md)."""
     if delta == 0:
         raise ValidationError("Stock delta must not be zero")
     if abs(delta) > MAX_QTY:

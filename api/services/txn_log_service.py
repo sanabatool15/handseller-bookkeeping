@@ -1,6 +1,6 @@
 """Transaction event log: the in-memory `TxnRecorder`, flush to the database, and the read side (Activity page).
 
-How a request gets logged (full story in specs/15):
+How a request gets logged (full story in docs/SQL_TRANSACTIONS.md):
   1. `routers.deps.get_db` creates a `TxnRecorder` for the request (request id from the RequestId middleware).
   2. A service wraps its repository call in `run_with_deadlock_retry(..., on_event=recorder.on_event, operation=...)`;
      the hook tells the recorder about every attempt, deadlock and retry, and the service reports business refusals.

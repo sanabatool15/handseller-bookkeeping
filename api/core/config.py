@@ -22,24 +22,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
 
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    # Idempotency keys are kept in SQL Server (table idempotency_keys); answers are remembered this long
     idempotency_ttl_seconds: int = 86400
 
-    # Inngest
-    inngest_event_key: str = "local-dev-event-key"
-    # Must satisfy the inngest SDK's hash_signing_key(): a "signkey-<word>-"
-    # prefix (stripped) followed by a valid hex string, even in dev mode
-    # (fetch_with_auth_fallback hashes it unconditionally whenever it's set).
-    inngest_signing_key: str = "signkey-test-00000000000000000000000000000000000000000000000000000000000000"
-    inngest_base_url: str = "http://localhost:8288"
-    inngest_dev: bool = True
-
-    # OpenAI
-    openai_api_key: str = "sk-test"
-    openai_model: str = "gpt-4o-mini"
-
-    # Transaction log + DB Lab (slice F5, specs/15 and specs/16)
+    # Transaction log + DB Lab (slice F5, docs/SQL_TRANSACTIONS.md and docs/FRONTEND.md)
     # A call whose elapsed time reaches this many ms is logged as "lock_wait_suspected". It is INFERRED from the
     # elapsed time: the application cannot observe lock waits directly.
     lock_wait_suspect_ms: int = 300

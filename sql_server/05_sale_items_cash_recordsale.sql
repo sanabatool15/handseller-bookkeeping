@@ -25,7 +25,7 @@
         (b) called INSIDE a caller's transaction (@@TRANCOUNT > 0; this is what the API connection does,
             pyodbc runs with autocommit OFF = SET IMPLICIT_TRANSACTIONS ON): the procedure must NOT commit
             (the caller owns the transaction), so it sets a SAVEPOINT and, on failure, rolls back only to it.
-     The procedure remembers which case it is in @own_tran. See api/specs/15-transactions-and-concurrency.md.
+     The procedure remembers which case it is in @own_tran. See docs/SQL_TRANSACTIONS.md.
    * Business failures (not enough stock, unknown product, ...) are NOT raised as errors: they are reported through
      the OUTPUT parameters (@status/@error_number/@message). Reason: with SET XACT_ABORT ON every raised error
      "dooms" the transaction (XACT_STATE() = -1) and only a FULL rollback is allowed, which would also destroy a

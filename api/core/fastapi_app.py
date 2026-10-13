@@ -1,7 +1,7 @@
 """FastAPI application entrypoint.
 
 Wires: routers, auth + idempotency middleware, CORS, lifespan (SQL Server
-reachability probe + Redis client setup/teardown), and mounts the Inngest FastAPI handler.
+reachability probe).
 """
 from __future__ import annotations
 
@@ -15,12 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from core.clients import close_clients, get_redis
 from core.config import get_settings
 from middleware.auth import AuthMiddleware
 from middleware.idempotency import IdempotencyMiddleware
 from middleware.request_id import RequestIdMiddleware
-from routers import (agent_jobs_router, auth_router, cash_router, customers_router, db_lab_router, expenses_router, products_router,
+from routers import (auth_router, cash_router, customers_router, db_lab_router, expenses_router, products_router,
                      sales_router, txn_log_router)
 from services import health_service
 
@@ -31,22 +30,13 @@ logger = logging.getLogger("handseller.app")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Probe SQL Server once so a bad connection string is visible in the startup log at once
-    # (not fatal: like Redis, the DB may come up later and each request opens its own connection).
+    # (not fatal: the DB may come up later and each request opens its own connection).
     db_status = await run_in_threadpool(health_service.check_database)
     if db_status == "ok":
         logger.info("SQL Server connection OK")
     else:
         logger.warning("SQL Server not reachable at startup (%s) - requests will fail until it is", db_status)
-    redis = get_redis()
-    try:
-        await redis.ping()
-        logger.info("Redis connection OK")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Redis not reachable at startup (%s) — will retry lazily per-request", exc)
-
     yield
-
-    await close_clients()
 
 
 app = FastAPI(title="Handseller Bookkeeping Backend", version="0.1.0", lifespan=lifespan)
@@ -103,12 +93,7 @@ def root():
 
 @app.get("/health")
 async def health():
-    checks = {"redis": "unknown", "database": "unknown"}
-    try:
-        await get_redis().ping()
-        checks["redis"] = "ok"
-    except Exception as exc:  # noqa: BLE001
-        checks["redis"] = f"error: {exc}"
+    checks = {}
     checks["database"] = await run_in_threadpool(health_service.check_database)
     return {"status": "ok", "checks": checks}
 
@@ -121,18 +106,3 @@ app.include_router(customers_router.router)
 app.include_router(cash_router.router)
 app.include_router(txn_log_router.router)
 app.include_router(db_lab_router.router)
-app.include_router(agent_jobs_router.router)
-
-# --- Inngest FastAPI handler mount ---
-# Assumption: pinned against inngest==0.5.x's `inngest.fast_api.serve` helper,
-# which registers the required PUT/POST/GET routes at `/api/inngest` for the
-# Inngest dev server / cloud to sync and invoke functions. See README.
-try:
-    import inngest.fast_api
-
-    from jobs.financial_agent_job import ALL_FUNCTIONS
-    from jobs.inngest_client import inngest_client
-
-    inngest.fast_api.serve(app, inngest_client, ALL_FUNCTIONS, serve_path="/api/inngest")
-except Exception as exc:  # noqa: BLE001
-    logger.warning("Could not mount Inngest handler (%s) — background jobs will not run until fixed", exc)

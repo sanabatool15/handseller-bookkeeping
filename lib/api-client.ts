@@ -1,7 +1,5 @@
-// Same-origin by default (frontend + backend are one Vercel deployment,
-// backend reachable under /api -- see vercel.json's rewrite and
-// api/index.py). Override NEXT_PUBLIC_API_URL for local dev against a
-// backend on a different origin/port than next.config.ts's dev proxy.
+// The browser calls /api/*; next.config.ts forwards it to the backend on port 8000.
+// Set NEXT_PUBLIC_API_URL to call a backend on another address directly.
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "/api").replace(/\/+$/, "");
 
 export class ApiError extends Error {

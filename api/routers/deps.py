@@ -26,7 +26,7 @@ def get_db(request: Request) -> Iterator[Db]:
     Also owns the request's `TxnRecorder` (stored on `request.state.txn_recorder`; routers pass `recorder.on_event` to
     services). ORDER MATTERS: the recorder is told about the commit/rollback only AFTER it really happened, and its
     events are flushed in `finally` AFTER the business connection is closed, through a separate autocommit
-    connection - so a rolled-back request still leaves its log (specs/15 section 8). The flush never raises."""
+    connection - so a rolled-back request still leaves its log (docs/SQL_TRANSACTIONS.md). The flush never raises."""
     db = get_db_connection()
     user = getattr(request.state, "user", None)
     request_id = getattr(request.state, "request_id", None) or uuid.uuid4().hex

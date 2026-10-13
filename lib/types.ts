@@ -109,39 +109,6 @@ export interface LedgerEntryInput {
   voucher_reference?: string | null;
 }
 
-export type AgentJobStatus = "pending" | "processing" | "completed" | "failed";
-
-export interface BookkeepingAdvice {
-  // Matches ai_agents/api/financial_advisor_agent.py's BookkeepingResult.
-  // The rule-based fallback (jobs/financial_agent_job.py) only ever sets
-  // mode + summary, leaving the rest undefined -- treat them as optional.
-  mode: "investigation" | "record_entry";
-  summary: string;
-  root_cause?: string | null;
-  recommendation?: string | null;
-  used_web_search?: boolean;
-  record_reference?: string | null;
-}
-
-export interface AgentJobResult {
-  advice: BookkeepingAdvice;
-  source: "openai_agent" | "rule_based_fallback" | string;
-}
-
-export interface AgentJob {
-  id: string;
-  job_name: string;
-  org_id: string;
-  requested_by: string;
-  status: AgentJobStatus;
-  current_step?: string | null;
-  input_payload?: Record<string, unknown>;
-  result?: AgentJobResult | null;
-  error_details?: string | null;
-  created_at: string;
-  updated_at: string;
-}
-
 export interface Product {
   id: string;
   org_id: string;

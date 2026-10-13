@@ -1,4 +1,4 @@
-"""Apply ../sql_server/*.sql (in numeric order) to SQL Server. Used by the `db-init` service in compose.yaml.
+"""Apply ../sql_server/*.sql (in numeric order) to SQL Server. Optional: an alternative to running the files by hand in SSMS.
 
 Splits each script on lines containing only `GO` (the SSMS/sqlcmd batch separator, which is not T-SQL) and runs every
 batch on an autocommit connection to `master`; the scripts switch to HandsellerDB themselves (`USE HandsellerDB`).

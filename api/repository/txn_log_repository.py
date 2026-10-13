@@ -1,7 +1,7 @@
 """Transaction event log repository (SQL Server / T-SQL). Every statement carries org_id.
 
 `insert_events` must be called with a SEPARATE AUTOCOMMIT connection (core.clients.get_autocommit_connection) so the rows
-survive a rollback of the business transaction (specs/15). The reads use the normal request connection.
+survive a rollback of the business transaction (docs/SQL_TRANSACTIONS.md). The reads use the normal request connection.
 """
 from __future__ import annotations
 

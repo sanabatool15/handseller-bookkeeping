@@ -5,7 +5,7 @@ Run the tests in order. They take about 30 minutes in total.
 
 ## Before you start
 
-1. Run the 7 scripts in `sql_server/` in SSMS, in order (`01` to `07`). Running a script twice is safe.
+1. Run the 8 scripts in `sql_server/` in SSMS, in order (`01` to `08`). Running a script twice is safe.
 2. Start the app (backend and frontend), register, and make at least one account.
 3. If you have more than one business (org), the blocks below use the first one. To see them: `SELECT id, name FROM orgs;`
 
@@ -36,7 +36,7 @@ SELECT name FROM sys.procedures ORDER BY name;
 SELECT name FROM sys.triggers ORDER BY name;
 ```
 You should see:
-* tables: `agent_jobs, agent_logs, cash_accounts, cash_ledger, customers, expenses, orgs, products, sale_items, sales, txn_log, users`
+* tables: `cash_accounts, cash_ledger, customers, expenses, idempotency_keys, orgs, products, sale_items, sales, txn_log, users`
 * procedures: `usp_AdjustEntryAmount, usp_RecordExpense, usp_RecordSale, usp_VoidExpense, usp_VoidSale`
 * triggers: one `trg_..._updated_at` per table (not `txn_log`)
 
@@ -342,17 +342,6 @@ Make a product with stock 1 and use these buttons:
 * **Force deadlock** (needs two products): one client shows error 1205, retries, and still commits.
 * **Deadlock fixed:** both commit, nobody is cancelled.
 Pass if: the results match. Each client has a link to its timeline on the Activity page.
-
----
-
-# Part H. Automatic tests (optional)
-
-From the `api/` folder:
-```
-$env:RUN_MSSQL = "1"        # PowerShell
-uv run pytest tests/sqlserver -v
-```
-These run the same checks by themselves. If every test shows "skipped", `RUN_MSSQL` was not set. They create and delete their own data. If one fails, copy the error text and ask for help.
 
 ---
 

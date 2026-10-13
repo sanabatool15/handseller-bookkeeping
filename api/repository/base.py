@@ -66,7 +66,6 @@ _OWNERSHIP_SQL = {
     "users": "SELECT 1 AS ok FROM users WHERE id = ? AND org_id = ?",
     "sales": "SELECT 1 AS ok FROM sales WHERE id = ? AND org_id = ?",
     "expenses": "SELECT 1 AS ok FROM expenses WHERE id = ? AND org_id = ?",
-    "agent_jobs": "SELECT 1 AS ok FROM agent_jobs WHERE id = ? AND org_id = ?",
     "products": "SELECT 1 AS ok FROM products WHERE id = ? AND org_id = ?",
     "customers": "SELECT 1 AS ok FROM customers WHERE id = ? AND org_id = ?",
 }

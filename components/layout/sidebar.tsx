@@ -9,7 +9,6 @@ import {
   Landmark,
   Package,
   Users,
-  Sparkles,
   Activity,
   FlaskConical,
   Settings,
@@ -21,7 +20,6 @@ import { cn } from "@/lib/utils";
 
 const NAV: { href: string; label: string; icon: typeof Receipt; labOnly?: boolean }[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/advisor", label: "AI Agent Advisor", icon: Sparkles },
   { href: "/sales", label: "Sales", icon: Receipt },
   { href: "/expenses", label: "Expenses", icon: Wallet },
   { href: "/cash", label: "Cash", icon: Landmark },

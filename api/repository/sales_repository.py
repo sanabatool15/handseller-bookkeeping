@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from core.db import Db
-from repository.base import BUSINESS_ERRORS, ProcedureError, clamp_page, month_range  # noqa: F401  (re-exported)
+from repository.base import BUSINESS_ERRORS, ProcedureError, clamp_page
 
 # sales has an AFTER UPDATE trigger => OUTPUT must go INTO a table variable (SQL Server error 334),
 # so every write does: DECLARE @o TABLE; <DML> OUTPUT ... INTO @o; SELECT * FROM @o.
@@ -24,10 +24,6 @@ _LIST = (
     "SELECT * FROM sales WHERE org_id = ? "
     "ORDER BY sale_date DESC, created_at DESC, id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
 )
-_LIST_MONTH = (
-    "SELECT * FROM sales WHERE org_id = ? AND sale_date >= ? AND sale_date < ? "
-    "ORDER BY sale_date DESC, created_at DESC, id"
-)
 _GET_SCOPED = "SELECT TOP (1) * FROM sales WHERE id = ? AND org_id = ?"
 # METADATA update only. `amount` is deliberately NOT updatable here: a sale's amount is part of the cash
 # ledger, so it changes only through dbo.usp_AdjustEntryAmount (cash_repository.adjust_entry_amount), which posts
@@ -41,14 +37,6 @@ _UPDATE = (
     + "customer_id = CASE WHEN ? = 1 THEN CAST(? AS uniqueidentifier) ELSE customer_id END "
     + _OUT_COLS
     + "WHERE id = ? AND org_id = ?; SELECT * FROM @o;"
-)
-_SUM_MONTH = (
-    "SELECT COALESCE(SUM(amount), 0) AS total FROM sales "
-    "WHERE org_id = ? AND sale_date >= ? AND sale_date < ?"
-)
-_SUM_BY_CATEGORY = (
-    "SELECT category, SUM(amount) AS total FROM sales "
-    "WHERE org_id = ? AND sale_date >= ? AND sale_date < ? GROUP BY category"
 )
 _UPDATABLE = ("category", "customer_name", "description", "customer_id")
 
@@ -67,7 +55,7 @@ _ITEMS_FOR_SALES = (
 )
 
 # EXEC the stored procedures in ONE batch and SELECT the OUTPUT values back (pyodbc has no OUTPUT-parameter API).
-# The procedures own their transaction logic (api/specs/15-transactions-and-concurrency.md).
+# The procedures own their transaction logic (docs/SQL_TRANSACTIONS.md).
 _RECORD_SALE = (
     "SET NOCOUNT ON; "
     "DECLARE @sale_id uniqueidentifier, @total decimal(14,2), @status nvarchar(20), @message nvarchar(400), "
@@ -109,11 +97,6 @@ def list_sales(db: Db, *, org_id: str, limit: int = 100, offset: int = 0) -> lis
     for sale in sales:
         sale["items"] = items.get(sale["id"], [])
     return sales
-
-
-def list_sales_for_month(db: Db, *, org_id: str, year: int, month: int) -> list[dict[str, Any]]:
-    start, end = month_range(year, month)
-    return db.query(_LIST_MONTH, (org_id, start, end))
 
 
 def get_sale_scoped(db: Db, *, sale_id: str, org_id: str) -> Optional[dict[str, Any]]:
@@ -194,14 +177,3 @@ def void_sale(db: Db, *, org_id: str, sale_id: str, voided_by: str | None) -> di
     return {"status": row["status"], "message": row["message"]}
 
 
-def sum_sales_for_month(db: Db, *, org_id: str, year: int, month: int) -> float:
-    start, end = month_range(year, month)
-    row = db.query_one(_SUM_MONTH, (org_id, start, end))
-    return float(row["total"]) if row else 0.0
-
-
-def sum_sales_by_category_for_month(db: Db, *, org_id: str, year: int, month: int) -> dict[str, float]:
-    """Returns {category: total_amount} for the given org/month, summed in SQL (GROUP BY)."""
-    start, end = month_range(year, month)
-    rows = db.query(_SUM_BY_CATEGORY, (org_id, start, end))
-    return {r["category"] or "uncategorized": float(r["total"]) for r in rows}

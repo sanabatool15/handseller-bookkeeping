@@ -2,7 +2,7 @@
    01_foundation.sql  --  Handseller Bookkeeping, SQL Server (T-SQL)
    Adds: database HandsellerDB, tables orgs + users, idx_users_org_id,
          AFTER UPDATE triggers that maintain updated_at.
-   Port of api/sql/schema.sql (Supabase/Postgres). Re-runnable: run it as often as
+   Re-runnable: run it as often as
    you like in SSMS; nothing is dropped.
 
    Design notes
@@ -12,11 +12,10 @@
      -> UPDATE users SET org_id. (Rolled back as a whole on any failure.)
    * users.email is UNIQUE (the real guard against duplicate registration races).
      Default collation is case-insensitive, so Bob@x.com == bob@x.com (the old
-     Postgres column was case-sensitive; see api/specs/17-open-questions.md).
+     Postgres column was case-sensitive; see docs/SQL_SERVER.md).
    * NO Row Level Security here. SQL Server RLS needs SESSION_CONTEXT plumbing and
-     the Postgres RLS policies were never the real control anyway (api/specs/10 #5):
-     the application layer (id AND org_id in every statement, enforced by
-     tests/unit/test_repository_sql_rules.py) is the primary tenancy control.
+     the Postgres RLS policies were never the real control anyway (docs/BACKEND.md):
+     the application layer (id AND org_id in every statement) is the primary tenancy control.
    * Because the tables have AFTER UPDATE triggers, repository code uses
      `OUTPUT ... INTO @table` + SELECT instead of bare `OUTPUT INSERTED.*`
      (SQL Server error 334 otherwise).

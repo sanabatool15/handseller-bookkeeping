@@ -4,13 +4,13 @@
          + idx_txn_log_org_request (org_id, request_id).
    Requires 01_foundation.sql. Re-runnable: nothing is dropped, the table/indexes are created only if missing.
 
-   What it is for (the demo layer of the course project, see api/specs/15 and api/specs/16)
+   What it is for (the demo layer of the course project, see docs/SQL_TRANSACTIONS.md and docs/FRONTEND.md)
    * The API appends one row per transaction EVENT of an instrumented request (record/void sale, record/void expense,
      amount adjustment, and the DB Lab demos): txn_started, lock_wait_suspected, deadlock_1205_caught,
      lock_timeout_caught, retry_triggered, rolled_back, committed, business_rejected.
    * The Activity page groups the rows by request_id (one row per request, GROUP BY) and shows the timeline of one request.
 
-   Design notes / deliberate deviations from the other tables (also in api/specs/17)
+   Design notes / deliberate deviations from the other tables (also in docs/SQL_SERVER.md)
    * APPEND-ONLY: rows are only ever inserted, never updated, so there is NO updated_at column and NO trigger
      (the convention of 01..06 exists to track edits). There is no created_by either: the log describes technical
      events of a request, not user-authored data; the org is what scopes it.
@@ -24,7 +24,7 @@
      inserts from SSMS.
    * step is restricted by a CHECK. 'lock_wait_suspected' is INFERRED by the application from the elapsed time of a call
      (it is not read from SQL Server's lock manager); the column values never claim more than that.
-   * Rows are never deleted by the application. Prune old rows by hand if the table grows (see api/specs/17).
+   * Rows are never deleted by the application. Prune old rows by hand if the table grows (see docs/SQL_SERVER.md).
    * OPTIONAL, for the DB Lab 'SNAPSHOT' isolation choice only (not run by this script, it changes the database):
          ALTER DATABASE HandsellerDB SET ALLOW_SNAPSHOT_ISOLATION ON;
      Without it, choosing SNAPSHOT in the lab fails with error 3952 and the lab reports a rolled_back client.

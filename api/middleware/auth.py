@@ -22,14 +22,13 @@ PUBLIC_PATHS = {
     "/redoc",
     "/auth/login",
     "/auth/register",
-    "/api/inngest",  # Inngest calls this endpoint with its own signing-key auth
 }
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint):
         path = request.url.path
-        if path in PUBLIC_PATHS or path.startswith("/api/inngest"):
+        if path in PUBLIC_PATHS:
             return await call_next(request)
 
         auth_header = request.headers.get("Authorization", "")

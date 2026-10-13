@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Handseller Bookkeeping",
-  description: "Agentic bookkeeping for handseller businesses",
+  description: "Bookkeeping for handseller businesses",
 };
 
 export default function RootLayout({

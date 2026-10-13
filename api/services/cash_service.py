@@ -1,4 +1,4 @@
-"""Cash balance / ledger / monthly summary reads. Cash is only WRITTEN by the sale/expense procedures (specs/14, specs/15)."""
+"""Cash balance / ledger / monthly summary reads. Cash is only WRITTEN by the sale/expense procedures (docs/SQL_SERVER.md, docs/SQL_TRANSACTIONS.md)."""
 from __future__ import annotations
 
 import datetime as dt

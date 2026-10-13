@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { DollarSign, TrendingUp, TrendingDown, Plus, Sparkles, Wallet } from "lucide-react";
+import { DollarSign, TrendingUp, TrendingDown, Plus, Wallet } from "lucide-react";
 import Link from "next/link";
 import { useLedger } from "@/lib/use-ledger";
 import { useCash } from "@/lib/use-cash";
@@ -66,11 +66,6 @@ export default function DashboardPage() {
           </Button>
           <Button variant="outline" onClick={() => setQuickAdd("expenses")}>
             <Plus className="h-4 w-4" /> Expense
-          </Button>
-          <Button asChild>
-            <Link href="/advisor">
-              <Sparkles className="h-4 w-4" /> Ask advisor
-            </Link>
           </Button>
         </div>
       </div>

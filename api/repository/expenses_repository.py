@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from core.db import Db
-from repository.base import call_procedure, clamp_page, month_range
+from repository.base import call_procedure, clamp_page
 
 # expenses has an AFTER UPDATE trigger => OUTPUT must go INTO a table variable (SQL Server error 334),
 # so every write does: DECLARE @o TABLE; <DML> OUTPUT ... INTO @o; SELECT * FROM @o.
@@ -24,10 +24,6 @@ _LIST = (
     "SELECT * FROM expenses WHERE org_id = ? "
     "ORDER BY expense_date DESC, created_at DESC, id OFFSET ? ROWS FETCH NEXT ? ROWS ONLY"
 )
-_LIST_MONTH = (
-    "SELECT * FROM expenses WHERE org_id = ? AND expense_date >= ? AND expense_date < ? "
-    "ORDER BY expense_date DESC, created_at DESC, id"
-)
 _GET_SCOPED = "SELECT TOP (1) * FROM expenses WHERE id = ? AND org_id = ?"
 # METADATA update only. `amount` is deliberately NOT updatable here (it is part of the cash ledger): it changes only
 # through dbo.usp_AdjustEntryAmount (cash_repository.adjust_entry_amount). Updates never set a column to NULL (the
@@ -39,17 +35,9 @@ _UPDATE = (
     + _OUT_COLS
     + "WHERE id = ? AND org_id = ?; SELECT * FROM @o;"
 )
-_SUM_MONTH = (
-    "SELECT COALESCE(SUM(amount), 0) AS total FROM expenses "
-    "WHERE org_id = ? AND expense_date >= ? AND expense_date < ?"
-)
-_SUM_BY_CATEGORY = (
-    "SELECT category, SUM(amount) AS total FROM expenses "
-    "WHERE org_id = ? AND expense_date >= ? AND expense_date < ? GROUP BY category"
-)
 _UPDATABLE = ("category", "voucher_reference", "description")
 
-# EXEC the stored procedures in ONE batch and SELECT the OUTPUT values back (see sales_repository / specs/15).
+# EXEC the stored procedures in ONE batch and SELECT the OUTPUT values back (see sales_repository / docs/SQL_TRANSACTIONS.md).
 _RECORD_EXPENSE = (
     "SET NOCOUNT ON; "
     "DECLARE @expense_id uniqueidentifier, @status nvarchar(20), @message nvarchar(400), @error_number int; "
@@ -101,11 +89,6 @@ def list_expenses(db: Db, *, org_id: str, limit: int = 100, offset: int = 0) -> 
     return db.query(_LIST, (org_id, offset, limit))
 
 
-def list_expenses_for_month(db: Db, *, org_id: str, year: int, month: int) -> list[dict[str, Any]]:
-    start, end = month_range(year, month)
-    return db.query(_LIST_MONTH, (org_id, start, end))
-
-
 def get_expense_scoped(db: Db, *, expense_id: str, org_id: str) -> Optional[dict[str, Any]]:
     return db.query_one(_GET_SCOPED, (expense_id, org_id))
 
@@ -126,14 +109,3 @@ def update_expense_scoped(db: Db, *, expense_id: str, org_id: str, updates: dict
     return db.query_one(_UPDATE, params)
 
 
-def sum_expenses_for_month(db: Db, *, org_id: str, year: int, month: int) -> float:
-    start, end = month_range(year, month)
-    row = db.query_one(_SUM_MONTH, (org_id, start, end))
-    return float(row["total"]) if row else 0.0
-
-
-def sum_expenses_by_category_for_month(db: Db, *, org_id: str, year: int, month: int) -> dict[str, float]:
-    """Returns {category: total_amount} for the given org/month, summed in SQL (GROUP BY)."""
-    start, end = month_range(year, month)
-    rows = db.query(_SUM_BY_CATEGORY, (org_id, start, end))
-    return {r["category"] or "uncategorized": float(r["total"]) for r in rows}

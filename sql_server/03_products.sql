@@ -17,7 +17,7 @@
      every statement) is the tenancy control.
    * Because the table has an AFTER UPDATE trigger, repository code uses
      `OUTPUT ... INTO @table` + SELECT instead of bare `OUTPUT INSERTED.*` (error 334).
-   * No ON DELETE CASCADE; products are hard-deleted by the API today (see api/specs/17).
+   * No ON DELETE CASCADE; products are hard-deleted by the API today (see docs/SQL_SERVER.md).
    ============================================================================= */
 
 USE HandsellerDB;
