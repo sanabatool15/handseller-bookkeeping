@@ -12,6 +12,13 @@ This branch (`ssms-extended`) is built around **Microsoft SQL Server and SSMS**.
 
 ## Set it up (about 10 minutes)
 
+**0. Get the code (this branch).**
+```
+git clone -b ssms-extended https://github.com/sanabatool15/handseller-bookkeeping.git
+cd handseller-bookkeeping
+```
+Already cloned the repo? Run `git fetch origin` then `git checkout ssms-extended`.
+
 **1. Create the database (in SSMS).** Connect to your server, open each file in `sql_server/` **in this order** and press Execute: `01`, `02`, `03`, `04`, `05`, `06`, `07`, `08`. Running a file twice is safe. Then check:
 ```sql
 USE HandsellerDB;
